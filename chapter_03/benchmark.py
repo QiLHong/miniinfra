@@ -16,6 +16,7 @@ from qwen3_model import (
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="固定批处理受控实验")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -42,11 +43,13 @@ def parse_args():
 
 
 def make_sequence(length, vocab_size, salt):
+    """按目标长度构造可重复的 token 序列，控制实验输入长度而不依赖生成内容。"""
     values = torch.arange(length, dtype=torch.long)
     return ((values * (7919 + salt) + 17 + salt) % (vocab_size - 1) + 1).tolist()
 
 
 def make_sequences(lengths, vocab_size):
+    """按实验要求构造多条指定长度的输入，供串行与批处理使用同一负载。"""
     return [
         make_sequence(length, vocab_size, 23 * (index + 1))
         for index, length in enumerate(lengths)
@@ -54,10 +57,12 @@ def make_sequences(lengths, vocab_size):
 
 
 def mean(values):
+    """求样本的算术平均值；调用方应提供非空样本。"""
     return sum(values) / len(values)
 
 
 def aggregate_throughput(mode, batch_size, runs):
+    """汇总固定批大小下的请求吞吐和输出 token 吞吐，批处理模式另记录逐轮 Decode 样本。"""
     metrics = [run["metrics"] for run in runs]
     row = {
         "mode": mode,
@@ -90,6 +95,7 @@ def aggregate_throughput(mode, batch_size, runs):
 
 
 def run_throughput(args, model, device):
+    """遍历批大小与串行/批处理模式，在相同合成请求上预热并重复测量吞吐。"""
     rows = []
     for batch_size in args.batch_sizes:
         sequences = make_sequences(
@@ -126,6 +132,7 @@ def run_throughput(args, model, device):
 
 
 def aggregate_batch_case(name, lengths, budgets, runs):
+    """汇总一个长度/预算组合的 Padding 效率、槽位利用率、延迟和缓存容量。"""
     metrics = [run["metrics"] for run in runs]
     decode_samples = [
         value for item in metrics for value in item["decode_times_ms"]
@@ -164,6 +171,7 @@ def aggregate_batch_case(name, lengths, budgets, runs):
 
 
 def run_batch_case(args, model, device, name, lengths, budgets):
+    """对指定提示长度和输出预算执行固定批处理预热与重复测量，然后返回汇总行。"""
     sequences = make_sequences(lengths, model.config.vocab_size)
     for _ in range(args.warmup):
         generate_fixed_batch(
@@ -193,6 +201,7 @@ def run_batch_case(args, model, device, name, lengths, budgets):
 
 
 def run_padding(args, model, device):
+    """比较等长与混合长度提示，保持批大小和输出预算一致以观察 Padding 开销。"""
     batch_size = 4
     output_budgets = [args.max_new_tokens] * batch_size
     homogeneous = [args.prompt_length] * batch_size
@@ -213,6 +222,7 @@ def run_padding(args, model, device):
 
 
 def run_slots(args, model, device):
+    """让同批请求使用不同输出预算，观察提前完成的槽位对固定批利用率的影响。"""
     budgets = [8, 16, 32, 64]
     lengths = [args.prompt_length] * len(budgets)
     return [
@@ -221,6 +231,7 @@ def run_slots(args, model, device):
 
 
 def main():
+    """按本章定义的输入规模运行预热与重复测量，汇总延迟、吞吐和资源指标。"""
     args = parse_args()
     if (
         any(value < 1 for value in args.batch_sizes)

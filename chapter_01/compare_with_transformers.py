@@ -17,6 +17,7 @@ from qwen3_tokenizer import Qwen3Tokenizer
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="与 Transformers 对比逐 Token 输出")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID, help="模型 ID 或本地目录")
     parser.add_argument(
@@ -98,6 +99,7 @@ def compare_step_by_step(
 
 
 def main():
+    """加载相同权重，逐步比较手写模型与 Transformers 的 logits 和贪心 token。"""
     args = parse_args()
     if args.max_new_tokens < 1:
         raise ValueError("--max-new-tokens 必须大于 0")

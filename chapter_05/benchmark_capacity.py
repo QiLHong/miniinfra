@@ -19,6 +19,7 @@ from qwen3_model import (
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="Paged KV Cache 容量实验")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -38,12 +39,14 @@ def parse_args():
 
 
 def clear_after_run(device):
+    """在一组容量实验结束后清理 Python/CUDA 资源，为下一组测试恢复环境。"""
     gc.collect()
     torch.cuda.empty_cache()
     torch.cuda.synchronize(device)
 
 
 def main():
+    """用不同缓存配置测试可承载的请求规模，记录容量、占用与执行结果。"""
     args = parse_args()
     if (
         any(value < 1 for value in args.concurrencies)

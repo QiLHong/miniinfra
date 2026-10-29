@@ -11,11 +11,15 @@ from scheduler import ChunkedPrefillScheduler, RequestState, SchedulerConfig
 
 
 def synchronize(device):
+    """CUDA 设备上等待已提交工作完成，CPU 路径直接返回。
+
+    GPU 调用通常异步返回；在主机计时边界同步，才能把实际执行时间纳入测量。"""
     if device.type == "cuda":
         torch.cuda.synchronize(device)
 
 
 def percentile(values, percent):
+    """对样本排序后按 nearest-rank 规则取分位数；空样本返回 0。"""
     if not values:
         return 0.0
     ordered = sorted(values)
@@ -24,6 +28,7 @@ def percentile(values, percent):
 
 
 def _maximum_consecutive_phase(events, phase):
+    """扫描事件，返回某阶段最长连续出现次数，用于检查 Prefill 是否持续挤占 Decode。"""
     maximum = 0
     current = 0
     for event in events:
@@ -36,6 +41,9 @@ def _maximum_consecutive_phase(events, phase):
 
 
 def _combine_request_caches(cache, states):
+    """把同组请求的逐层历史 K/V 沿批次维度拼接；混合空缓存与非空缓存时拒绝执行。
+
+    调用方必须先按历史长度分组，否则非批次维度无法对齐。"""
     caches = [cache.dense_request_cache(state.spec.request_id) for state in states]
     if all(item is None for item in caches):
         return None
@@ -51,8 +59,13 @@ def _combine_request_caches(cache, states):
 
 
 def _build_chunk_batch(plans, pad_token_id, device):
+    """将历史长度一致的 Prefill 片段左补齐为一个批次，并构造历史加新片段的 Mask。
+
+    input_ids 只包含本轮片段；attention_mask 还覆盖旧历史，position_ids
+    则使用各请求的逻辑 token 位置，不能直接拿补齐后的列下标代替。"""
     lengths = [plan.token_count for plan in plans]
     maximum = max(lengths)
+    # 同一执行组的历史长度必须一致；不同前缀长度的请求由外层分组分别调用。
     prefix_length = plans[0].start
     if any(plan.start != prefix_length for plan in plans):
         raise ValueError("同一执行组的历史前缀长度必须一致")
@@ -85,6 +98,10 @@ def _build_chunk_batch(plans, pad_token_id, device):
 
 
 def _timed_prefill(model, plans, cache, pad_token_id, device, capture_logits):
+    """按历史长度对 Prefill 计划分组，每组构造带 Mask 的片段批次并执行模型。
+
+    从返回缓存中截取本轮新增 K/V 写回分页池；只有处理到提示末尾的请求
+    才选出首 token。分别返回模型、缓存管理和整体耗时，供引擎更新时间与状态。"""
     groups = defaultdict(list)
     for plan in plans:
         groups[plan.start].append(plan)
@@ -145,6 +162,9 @@ def _timed_prefill(model, plans, cache, pad_token_id, device, capture_logits):
 
 
 def _timed_decode(model, running, cache, capacity, pad_token_id, device):
+    """构造本轮活跃请求的单 token 输入与位置编号，再调用分页 Decode。
+
+    位置取已写入的缓存长度；输出是下一 token，它要到下一轮才会写入 K/V。"""
     synchronize(device)
     prepare_start = time.perf_counter()
     input_ids = torch.full(
@@ -154,7 +174,9 @@ def _timed_decode(model, running, cache, capacity, pad_token_id, device):
     slot_request_ids = [None] * capacity
     for state in running:
         slot = state.slot_index
+        # 输入的是上一步已选出、但尚未写入 K/V 的 token；本轮计算再选出它后面的 token。
         input_ids[slot, 0] = state.generated[-1]
+        # RoPE 位置使用逻辑有效长度，不能用物理块编号或含 Padding 的张量列数替代。
         position_ids[slot, 0] = state.cache_length
         slot_request_ids[slot] = state.spec.request_id
     synchronize(device)
@@ -179,11 +201,15 @@ def _timed_decode(model, running, cache, capacity, pad_token_id, device):
 
 
 def _record_tokens(states, token_ids, token_time_ms, eos_token_id, stop_on_eos):
+    """为本轮请求记录新 token 和时间戳，遇到 EOS 或输出预算用尽时标记完成。
+
+    只更新请求输出状态，物理缓存释放由引擎单独执行；首 token 时间只设置一次。"""
     completed = []
     for state, token_id in zip(states, token_ids):
         state.generated.append(int(token_id))
         state.token_times_ms.append(token_time_ms)
         if state.first_token_ms is None:
+            # 首 token 时间只记录第一次，后续 token 时间写入列表用于计算 ITL。
             state.first_token_ms = token_time_ms
         reached_eos = stop_on_eos and token_id == eos_token_id
         reached_budget = len(state.generated) >= state.spec.max_new_tokens
@@ -195,6 +221,7 @@ def _record_tokens(states, token_ids, token_time_ms, eos_token_id, stop_on_eos):
 
 
 def _release(cache, completed_states, device):
+    """释放已完成请求占用的缓存资源，并返回资源整理所花的时间。"""
     if not completed_states:
         return 0.0
     synchronize(device)
@@ -206,6 +233,10 @@ def _release(cache, completed_states, device):
 
 
 def _finalize(states, events, config, peak_memory, cache, scheduler_ms_total):
+    """从请求时间戳和迭代事件汇总吞吐、排队时间、首 token 延迟和相邻 token 间隔。
+
+    TTFT 从请求到达到首 token 计算，ITL 来自同一请求相邻输出时间差；
+    这些指标包含的调度等待不同，不能用单次模型前向耗时互相替代。"""
     ordered = list(states)
     first_arrival = min(state.spec.arrival_ms for state in ordered)
     last_completion = max(state.completion_ms for state in ordered)
@@ -360,6 +391,7 @@ def run_engine(
         if output is None:
             if prefilling or running:
                 raise RuntimeError("调度器没有为活跃请求生成执行计划")
+            # 没有可运行工作时，把模拟时间推进到下一次请求到达，避免空转循环。
             clock_ms = min(state.spec.arrival_ms for state in waiting)
             continue
 

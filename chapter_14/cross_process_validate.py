@@ -11,6 +11,7 @@ from experiment_utils import add_model_arguments, cache_service, write_json
 
 
 def main():
+    """启动独立工作进程验证外部缓存复用，避免同一进程内状态造成虚假的跨进程命中。"""
     parser = argparse.ArgumentParser(description="第 14 期真实跨进程验证")
     add_model_arguments(parser)
     parser.add_argument("--prompt-length", type=int, default=513)

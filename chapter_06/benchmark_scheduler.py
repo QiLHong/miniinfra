@@ -22,6 +22,7 @@ from scheduler import make_request_specs
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="迭代级调度器受控实验")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -48,11 +49,13 @@ def parse_args():
 
 
 def make_sequence(length, vocab_size, salt):
+    """按目标长度构造可重复的 token 序列，控制实验输入长度而不依赖生成内容。"""
     values = torch.arange(length, dtype=torch.long)
     return ((values * (7919 + salt) + 17 + salt) % (vocab_size - 1) + 1).tolist()
 
 
 def build_specs(args, model):
+    """按本实验设定的提示长度、输出预算与到达时间构造固定请求列表。"""
     lengths = (
         [args.initial_prompt_length] * args.initial_requests
         + args.burst_prompt_lengths
@@ -73,10 +76,12 @@ def build_specs(args, model):
 
 
 def mean(values):
+    """求样本的算术平均值；调用方应提供非空样本。"""
     return sum(values) / len(values)
 
 
 def initial_itls(run, initial_requests):
+    """只收集最初一批请求的相邻输出时间差，观察后来的突发请求是否拖慢它们。"""
     values = []
     initial_ids = {str(index) for index in range(initial_requests)}
     for request in run["request_metrics"]:
@@ -92,6 +97,7 @@ def initial_itls(run, initial_requests):
 
 
 def burst_metric(run, initial_requests, key):
+    """从后到达的突发请求中提取指定指标，与已有请求的 ITL 分开统计。"""
     return [
         item[key] for item in run["request_metrics"]
         if int(item["request_id"]) >= initial_requests
@@ -122,6 +128,9 @@ SUMMARY_KEYS = [
 
 
 def summarize(label, policy, token_budget, runs, initial_requests):
+    """汇总本组重复测量，保留脚本所需的均值、分位数或资源指标。
+
+    单位沿用输入字段；多次运行的分位数平均值与合并原始样本后重算的分位数不同。"""
     row = {
         "label": label,
         "policy": policy,
@@ -177,12 +186,14 @@ def summarize(label, policy, token_budget, runs, initial_requests):
 
 
 def clean_cuda(device):
+    """清理实验间不再使用的对象与 CUDA 缓存，减少上一组测量对下一组的影响。"""
     gc.collect()
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
 
 def system_environment(device):
+    """记录软件和硬件环境，帮助解释不同机器或版本之间的性能差异。"""
     try:
         driver = subprocess.run(
             ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
@@ -217,6 +228,7 @@ def system_environment(device):
 
 
 def main():
+    """在固定请求到达序列上比较调度策略，观察吞吐和已有请求的输出间隔。"""
     args = parse_args()
     positive = [
         args.max_running_requests, args.initial_requests,

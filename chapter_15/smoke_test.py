@@ -12,7 +12,9 @@ from experiment_utils import handoff_service
 
 
 class ToyModel(torch.nn.Module):
+    """为交接测试提供确定性的轻量模型，验证数据与生命周期而无需下载真实权重。"""
     def __init__(self):
+        """定义微型头形状、词表大小和占位参数，让测试模型满足引擎接口。"""
         super().__init__()
         self.anchor = torch.nn.Parameter(torch.zeros(()))
         self.config = SimpleNamespace(
@@ -24,6 +26,7 @@ class ToyModel(torch.nn.Module):
         self, input_ids, attention_mask, position_ids,
         past_key_values=None, use_cache=True,
     ):
+        """按输入与位置生成可检查的 K/V，并让贪心输出固定为下一个 token ID。"""
         batch, count = input_ids.shape
         current = (
             input_ids.float().view(batch, 1, count, 1)
@@ -43,6 +46,9 @@ class ToyModel(torch.nn.Module):
 
 
 def main():
+    """运行本章的小规模 CPU 冒烟检查，验证核心数据流、状态或输出一致性。
+
+    使用本地微型模型或测试替身，不下载真实模型；通过这些检查不等于 GPU 性能验证。"""
     model = ToyModel()
     tokens = [3, 7, 11, 15, 19]
     baseline = run_monolithic(
@@ -64,6 +70,7 @@ def main():
         acknowledged = []
 
         def ack():
+            """在接收方完成导入后发送接受确认，并记录回调已发生。"""
             client.acknowledge("request-0", "attempt-0", True)
             acknowledged.append(True)
 

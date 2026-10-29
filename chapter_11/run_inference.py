@@ -11,6 +11,7 @@ from speculative_decode import speculative_greedy_generate, target_greedy_genera
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", choices=["target_only", "speculative"], default="speculative")
     parser.add_argument("--target-model", default=DEFAULT_TARGET_MODEL_ID)
@@ -26,6 +27,7 @@ def parse_args():
 
 
 def main():
+    """读取命令行配置、加载模型并运行本章推理路径，最后展示生成结果及相关指标。"""
     args = parse_args()
     if args.device.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError("没有可用 CUDA GPU")

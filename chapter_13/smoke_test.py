@@ -10,6 +10,7 @@ from transfer import KVTransferManager
 
 
 def build_tiny_model():
+    """用缩小的词表、隐藏维度和层数创建随机权重模型，便于在 CPU 上快速验证算法。"""
     config = Qwen3Config(
         vocab_size=97,
         hidden_size=32,
@@ -27,6 +28,7 @@ def build_tiny_model():
 
 
 def check_deferred_ownership():
+    """检查传输准备与完成分离：预留阶段保留源块，完成阶段才归还资源，并验证 K/V 往返一致。"""
     model = build_tiny_model()
     device = torch.device("cpu")
     cache = PagedKVCache(
@@ -66,6 +68,9 @@ def check_deferred_ownership():
 
 
 def check_engine_modes():
+    """在 CPU 路径核对 sync/async 的资源状态与输出，和无抢占参考进行比较。
+
+    这能检查调度及所有权逻辑，不能证明真实 CUDA 流发生了传输重叠。"""
     torch.manual_seed(11)
     model = build_tiny_model()
     specs = make_request_specs(
@@ -114,6 +119,9 @@ def check_engine_modes():
 
 
 def main():
+    """运行本章的小规模 CPU 冒烟检查，验证核心数据流、状态或输出一致性。
+
+    使用本地微型模型或测试替身，不下载真实模型；通过这些检查不等于 GPU 性能验证。"""
     check_deferred_ownership()
     reference, sync, asynchronous = check_engine_modes()
     print("Smoke test 通过")

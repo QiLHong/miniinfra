@@ -11,6 +11,7 @@ import torch
 
 
 def seed_everything(seed):
+    """固定本脚本使用的随机数种子，使随机权重或合成负载可以重复生成。"""
     import random
 
     random.seed(seed)
@@ -18,6 +19,7 @@ def seed_everything(seed):
 
 
 def collect_environment(device):
+    """收集 Python、PyTorch、系统与设备信息；可选硬件查询失败时保留已有字段。"""
     cpu_model = platform.processor()
     try:
         with open("/proc/cpuinfo", encoding="utf-8") as file:
@@ -92,6 +94,7 @@ def synthesize_workload(vocab_size, lengths, max_new_tokens, seed, arrivals=None
 
 
 def save_results(path, payload):
+    """创建结果目录并保存 JSON 数据；输出路径由调用方选择。"""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("w", encoding="utf-8") as file:
@@ -100,4 +103,5 @@ def save_results(path, payload):
 
 
 def format_ms(value):
+    """把毫秒值格式化为展示文本；缺失值保留为不可用标记。"""
     return "%.2f ms" % value if value is not None else "n/a"

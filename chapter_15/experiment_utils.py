@@ -23,6 +23,7 @@ from qwen3_model import (
 
 
 def parse_dtype(value):
+    """把命令行精度名称转换为 torch.dtype，供模型与缓存使用一致的数据类型。"""
     mapping = {
         "float32": torch.float32,
         "float16": torch.float16,
@@ -34,6 +35,9 @@ def parse_dtype(value):
 
 
 def free_local_port():
+    """临时绑定本机的自动分配端口，读取端口号后关闭探测 socket。
+
+    返回值不是持续占用的端口预留，真正的服务仍需成功绑定才能使用。"""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.bind(("127.0.0.1", 0))
         return sock.getsockname()[1]
@@ -41,6 +45,7 @@ def free_local_port():
 
 @contextmanager
 def handoff_service(port=None):
+    """启动本机交接服务子进程，等待就绪后提供客户端，并在退出上下文时回收进程。"""
     port = free_local_port() if port is None else int(port)
     script = Path(__file__).with_name("handoff_server.py")
     process = subprocess.Popen(
@@ -83,6 +88,7 @@ def handoff_service(port=None):
 
 
 def load_model(model_name, revision, device, dtype):
+    """解析模型目录并按实验指定的设备和精度加载手写模型，返回目录及所需模型信息。"""
     directory = resolve_model_directory(model_name, revision)
     config = Qwen3Config.from_model_directory(directory)
     model = load_handwritten_model(directory, device, dtype=dtype)
@@ -90,6 +96,7 @@ def load_model(model_name, revision, device, dtype):
 
 
 def environment_record(model_name, revision, device, dtype):
+    """生成本次实验的软件与硬件环境记录，便于回溯结果产生条件。"""
     record = {
         "python": platform.python_version(),
         "platform": platform.platform(),
@@ -110,6 +117,7 @@ def environment_record(model_name, revision, device, dtype):
 
 
 def write_json(path, value):
+    """把实验结果写为 UTF-8 JSON，便于保留原始参数、环境和指标。"""
     if path is None:
         return
     target = Path(path)
@@ -120,6 +128,7 @@ def write_json(path, value):
 
 
 def add_model_arguments(parser):
+    """为实验入口注册共用的模型、版本、设备与精度参数，避免各入口配置不一致。"""
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
     parser.add_argument("--device", default="cuda")

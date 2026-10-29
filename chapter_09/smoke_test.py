@@ -8,6 +8,7 @@ from scheduler import make_request_specs
 
 
 def build_tiny_model():
+    """用缩小的词表、隐藏维度和层数创建随机权重模型，便于在 CPU 上快速验证算法。"""
     config = Qwen3Config(
         vocab_size=127,
         hidden_size=32,
@@ -25,6 +26,7 @@ def build_tiny_model():
 
 
 def run_pair(model, sequences, outputs, block_size=4, capacity=8):
+    """在完全相同请求上开关前缀缓存，返回两次结果供输出和资源状态比较。"""
     specs = make_request_specs(sequences, outputs)
     common = dict(
         model=model,
@@ -46,6 +48,7 @@ def run_pair(model, sequences, outputs, block_size=4, capacity=8):
 
 
 def assert_same_outputs(disabled, enabled, tolerance=1e-4):
+    """先检查逐请求 token 完全相同，再按容差核对首 token logits。"""
     assert disabled["new_token_ids"] == enabled["new_token_ids"]
     for request_id, baseline in disabled["first_token_logits"].items():
         error = torch.max(torch.abs(
@@ -55,6 +58,7 @@ def assert_same_outputs(disabled, enabled, tolerance=1e-4):
 
 
 def check_shared_prefix(model):
+    """验证相同完整前缀真正命中、减少重算，且请求完成后只保留缓存索引所需引用。"""
     common = [3, 5, 7, 11, 13, 17, 19, 23]
     sequences = [common + [29, 31, 37], common + [41, 43, 47]]
     disabled, enabled = run_pair(model, sequences, [3, 3])
@@ -70,6 +74,7 @@ def check_shared_prefix(model):
 
 
 def check_context_sensitive_hash(model):
+    """用相同中段、不同前缀的请求证明缓存键包含历史上下文，不能只凭当前块内容复用。"""
     same_second_block = [53, 59, 61, 67]
     sequences = [
         [2, 3, 5, 7] + same_second_block + [71],
@@ -82,6 +87,7 @@ def check_context_sensitive_hash(model):
 
 
 def check_capacity_eviction(model):
+    """把前缀缓存容量限制为一个块，验证淘汰发生且不改变模型输出或留下请求引用。"""
     sequences = [
         [2, 3, 5, 7, 11],
         [13, 17, 19, 23, 29],
@@ -96,6 +102,9 @@ def check_capacity_eviction(model):
 
 
 def main():
+    """运行本章的小规模 CPU 冒烟检查，验证核心数据流、状态或输出一致性。
+
+    使用本地微型模型或测试替身，不下载真实模型；通过这些检查不等于 GPU 性能验证。"""
     torch.manual_seed(8)
     model = build_tiny_model()
     disabled, enabled = check_shared_prefix(model)

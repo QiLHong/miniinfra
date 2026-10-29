@@ -10,6 +10,7 @@ from qwen3_model import eager_attention_forward
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="FlashAttention Kernel 正确性测试")
     parser.add_argument("--seed", type=int, default=9)
     parser.add_argument("--output", help="可选 JSON 输出路径")
@@ -17,6 +18,7 @@ def parse_args():
 
 
 def build_case(name, batch, query_length, key_length, causal_offset, padding):
+    """按指定长度和因果偏移构造 Q/K/V，必要时在第二条请求加入 Padding 掩码。"""
     device = torch.device("cuda")
     query = torch.randn(
         batch, 16, query_length, 128, device=device, dtype=torch.bfloat16
@@ -45,6 +47,7 @@ def build_case(name, batch, query_length, key_length, causal_offset, padding):
 
 
 def run_case(case):
+    """对同一输入执行 eager 与 Flash Attention，统计有效 Query 位置误差并检查整体容差。"""
     with torch.inference_mode():
         reference = eager_attention_forward(
             case["query"], case["key"], case["value"],
@@ -77,6 +80,7 @@ def run_case(case):
 
 
 def main():
+    """构造注意力输入并比较显式与 Flash 路径，按设定容差核对数值结果。"""
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("正确性测试需要 NVIDIA GPU")

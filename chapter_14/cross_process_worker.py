@@ -17,6 +17,7 @@ from experiment_utils import (
 
 
 def main():
+    """作为独立进程加载模型并执行指定缓存实验，将结果写出供主控进程核对。"""
     parser = argparse.ArgumentParser()
     add_model_arguments(parser)
     parser.add_argument("--role", choices=("producer", "consumer"), required=True)

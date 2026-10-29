@@ -15,6 +15,7 @@ from qwen3_tokenizer import Qwen3Tokenizer
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="运行并比较 KV Cache 推理")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID, help="模型 ID 或本地目录")
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -30,10 +31,12 @@ def parse_args():
 
 
 def format_mib(byte_count):
+    """将字节数换算为 MiB，供输出层统一展示内存容量。"""
     return byte_count / 1024**2
 
 
 def print_result(mode, result, tokenizer, prompt_length):
+    """解码生成的 token，并按本章的计时与内存口径展示结果。"""
     metrics = result["metrics"]
     output_token_ids = result["output_ids"][0, prompt_length:].tolist()
     generated_text = tokenizer.decode(output_token_ids, skip_special_tokens=True)
@@ -52,6 +55,7 @@ def print_result(mode, result, tokenizer, prompt_length):
 
 
 def main():
+    """读取命令行配置、加载模型并运行本章推理路径，最后展示生成结果及相关指标。"""
     args = parse_args()
     if args.max_new_tokens < 1:
         raise ValueError("--max-new-tokens 必须大于 0")

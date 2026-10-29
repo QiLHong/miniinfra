@@ -14,6 +14,7 @@ from qwen3_model import eager_attention_forward
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="FlashAttention 长序列微基准")
     parser.add_argument("--lengths", type=int, nargs="+", default=[256, 1024, 4096, 8192])
     parser.add_argument("--warmup", type=int, default=5)
@@ -26,6 +27,7 @@ def parse_args():
 
 
 def execute(backend, length, warmup, repeats):
+    """为指定长度构造相同形状的 Q/K/V，预热后用 CUDA Event 记录延迟，并捕获显存不足状态。"""
     torch.manual_seed(9)
     device = torch.device("cuda")
     shape = (1, 16, length, 128)
@@ -71,6 +73,7 @@ def execute(backend, length, warmup, repeats):
 
 
 def system_environment():
+    """记录软件和硬件环境，帮助解释不同机器或版本之间的性能差异。"""
     device = torch.device("cuda")
     properties = torch.cuda.get_device_properties(device)
     try:
@@ -92,12 +95,14 @@ def system_environment():
         "gpu_driver": driver,
     }
 def worker(args):
+    """在独立进程中执行一个 Attention 配置，将测量记录编码为 JSON 输出。"""
     if not torch.cuda.is_available():
         raise RuntimeError("微基准需要 NVIDIA GPU")
     print(json.dumps(execute(args.backend, args.length, args.warmup, args.repeats)))
 
 
 def parent(args):
+    """逐个启动独立工作进程测量后端与长度组合，汇总成功、显存不足或错误记录。"""
     rows = []
     script = str(Path(__file__).resolve())
     for length in args.lengths:
@@ -157,6 +162,7 @@ def parent(args):
 
 
 def main():
+    """选择主控或独立工作进程，在受控 Attention 输入上测量不同后端。"""
     args = parse_args()
     if args.worker:
         worker(args)

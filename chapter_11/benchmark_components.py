@@ -18,6 +18,7 @@ from speculative_decode import prefill, target_greedy_generate
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--target-model", default=DEFAULT_TARGET_MODEL_ID)
     parser.add_argument("--draft-model", default=DEFAULT_DRAFT_MODEL_ID)
@@ -35,9 +36,11 @@ def parse_args():
 
 
 def measure_forward(model, cache, input_ids, warmup, repeats, device):
+    """在固定缓存检查点上重复前向，每次回滚有效长度，使各次测量拥有同样的历史上下文。"""
     checkpoint = cache.length
 
     def call():
+        """执行一次前向后回滚到共同检查点，防止下一次测量的上下文越来越长。"""
         model(input_ids, cache)
         cache.rollback(checkpoint)
 
@@ -52,6 +55,7 @@ def measure_forward(model, cache, input_ids, warmup, repeats, device):
 
 @torch.inference_mode()
 def main():
+    """分开测量目标与草稿模型的不同前向工作量，解释推测解码的成本组成。"""
     args = parse_args()
     if args.device.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError("没有可用 CUDA GPU")

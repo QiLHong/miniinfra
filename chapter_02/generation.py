@@ -8,12 +8,15 @@ from qwen3_model import cache_size_bytes
 
 
 def synchronize(device):
+    """CUDA 设备上等待已提交工作完成，CPU 路径直接返回。
+
+    GPU 调用通常异步返回；在主机计时边界同步，才能把实际执行时间纳入测量。"""
     if device.type == "cuda":
         torch.cuda.synchronize(device)
 
 
 def percentile(values, percent):
-    """使用 nearest-rank 定义计算小样本延迟分位数。"""
+    """对样本排序后按 nearest-rank 规则取分位数；空样本返回 0。"""
 
     if not values:
         return 0.0
@@ -23,6 +26,7 @@ def percentile(values, percent):
 
 
 def _timed_forward(model, model_input, device, past_key_values, use_cache):
+    """同步计时一次模型前向和贪心选 token，返回下一 token、更新后的缓存及毫秒数。"""
     synchronize(device)
     start_time = time.perf_counter()
     logits, present_key_values = model(
@@ -142,6 +146,7 @@ def _build_result(
     cache_bytes,
     device,
 ):
+    """分离首次 Prefill 与后续 Decode 耗时，汇总输出、延迟分位数和缓存/显存指标。"""
     decode_times = step_times_ms[1:]
     peak_memory_bytes = 0
     if device.type == "cuda":
@@ -176,6 +181,7 @@ def generate(
     device,
     stop_on_eos=True,
 ):
+    """根据模式选择完整上下文重算或 KV Cache 生成路径，未知模式显式报错。"""
     if mode == "no-cache":
         function = generate_no_cache
     elif mode == "kv-cache":

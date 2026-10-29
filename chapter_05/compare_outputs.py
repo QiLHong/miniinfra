@@ -17,6 +17,7 @@ from qwen3_tokenizer import Qwen3Tokenizer
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="Paged KV Cache 正确性实验")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -28,6 +29,7 @@ def parse_args():
 
 
 def main():
+    """用同一组请求运行本章的基准与优化路径，逐请求检查生成结果并报告资源指标。"""
     args = parse_args()
     if args.max_new_tokens < 2 or any(size < 1 for size in args.block_sizes):
         raise ValueError("生成长度至少为 2，Block Size 必须为正")

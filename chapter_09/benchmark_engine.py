@@ -21,6 +21,7 @@ from scheduler import make_request_specs
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="Eager/FlashAttention 端到端实验")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -34,15 +35,18 @@ def parse_args():
 
 
 def make_sequence(length, vocab_size):
+    """按目标长度构造可重复的 token 序列，控制实验输入长度而不依赖生成内容。"""
     values = torch.arange(length, dtype=torch.long)
     return ((values * 7927 + 31) % (vocab_size - 1) + 1).tolist()
 
 
 def mean(values):
+    """求样本的算术平均值；调用方应提供非空样本。"""
     return sum(values) / len(values)
 
 
 def environment(device):
+    """收集当前软件版本与设备信息，随实验结果一起保存。"""
     try:
         driver = subprocess.run(
             ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
@@ -68,6 +72,9 @@ def environment(device):
 
 
 def summarize(backend, runs):
+    """汇总本组重复测量，保留脚本所需的均值、分位数或资源指标。
+
+    单位沿用输入字段；多次运行的分位数平均值与合并原始样本后重算的分位数不同。"""
     keys = [
         "makespan_ms", "busy_ms", "model_ms", "peak_memory_bytes",
         "output_token_throughput_per_second", "prefill_iterations",
@@ -92,6 +99,7 @@ def summarize(backend, runs):
 
 
 def main():
+    """在引擎层比较 Attention 后端的完整运行成本，记录吞吐、等待与环境信息。"""
     args = parse_args()
     if min(args.prompt_length, args.max_new_tokens, args.token_budget, args.repeats) < 1:
         raise ValueError("长度、预算和 repeats 必须为正")
@@ -109,6 +117,7 @@ def main():
     )
 
     def execute(backend):
+        """在指定 Attention 后端运行一次相同请求负载，供重复测量使用。"""
         model.set_attention_backend(backend)
         return run_engine(
             model, specs, 1, -1, device,

@@ -18,6 +18,7 @@ from qwen3_tokenizer import Qwen3Tokenizer
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="Paged KV Cache Logits 对照")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -31,6 +32,7 @@ def parse_args():
 
 @torch.inference_mode()
 def compare_prompt(model, tokenizer, prompt, max_new_tokens, block_size, device):
+    """先建立同一提示的两份缓存，再逐步比较稠密与分页 Decode 的 logits 和 token。"""
     token_ids = tokenizer.encode_chat_prompt(prompt)
     input_ids = torch.tensor([token_ids], dtype=torch.long, device=device)
     mask = torch.ones_like(input_ids, dtype=torch.bool)
@@ -97,6 +99,7 @@ def compare_prompt(model, tokenizer, prompt, max_new_tokens, block_size, device)
 
 
 def main():
+    """对照稠密与分页缓存路径的模型分数，定位只比较最终文本可能看不见的误差。"""
     args = parse_args()
     if args.max_new_tokens < 2 or args.block_size < 1:
         raise ValueError("生成长度至少为 2，Block Size 必须为正")

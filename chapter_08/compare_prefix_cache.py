@@ -17,6 +17,7 @@ from scheduler import make_request_specs
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="Prefix Cache 正确性实验")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -28,11 +29,13 @@ def parse_args():
 
 
 def make_sequence(length, vocab_size, salt):
+    """按目标长度构造可重复的 token 序列，控制实验输入长度而不依赖生成内容。"""
     values = torch.arange(length, dtype=torch.long)
     return ((values * (7919 + salt) + 17 + salt) % (vocab_size - 1) + 1).tolist()
 
 
 def build_sequences(vocab_size):
+    """构造对齐/非对齐共享前缀及相同中段但不同前缀的输入，检查缓存命中的边界。"""
     aligned = make_sequence(32, vocab_size, 11)
     unaligned = make_sequence(34, vocab_size, 23)
     repeated_middle = make_sequence(16, vocab_size, 37)
@@ -47,6 +50,7 @@ def build_sequences(vocab_size):
 
 
 def compact_requests(run):
+    """抽取请求级比较字段，便于核对缓存开关前后的输出与缓存行为。"""
     return [
         {
             "request_id": row["request_id"],
@@ -60,6 +64,7 @@ def compact_requests(run):
 
 
 def main():
+    """在相同请求上开关前缀缓存，检查复用前缀后输出和首 token 分数是否一致。"""
     args = parse_args()
     if args.block_size < 1 or args.token_budget < 1:
         raise ValueError("Block Size 和 Token Budget 必须为正")

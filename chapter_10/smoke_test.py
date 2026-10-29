@@ -7,6 +7,7 @@ from static_decode import StaticDecodeRunner
 
 
 def tiny_model():
+    """创建供 CPU 冒烟测试使用的小模型，沿用真实前向结构但缩小计算规模。"""
     torch.manual_seed(7)
     config = Qwen3Config(
         vocab_size=97,
@@ -27,6 +28,7 @@ def tiny_model():
 
 
 def run_path(runner, prompts, steps):
+    """运行静态 eager 测试路径，复制每步输出以免下一步原位更新覆盖历史结果。"""
     first = runner.prepare_prompts(prompts)
     generated = [[token] for token in first]
     for _ in range(steps):
@@ -37,6 +39,9 @@ def run_path(runner, prompts, steps):
 
 
 def main():
+    """运行本章的小规模 CPU 冒烟检查，验证核心数据流、状态或输出一致性。
+
+    使用本地微型模型或测试替身，不下载真实模型；通过这些检查不等于 GPU 性能验证。"""
     model = tiny_model()
     runner = StaticDecodeRunner(
         model,

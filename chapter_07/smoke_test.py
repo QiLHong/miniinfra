@@ -13,6 +13,7 @@ from scheduler import (
 
 
 def build_tiny_model():
+    """用缩小的词表、隐藏维度和层数创建随机权重模型，便于在 CPU 上快速验证算法。"""
     config = Qwen3Config(
         vocab_size=97,
         hidden_size=32,
@@ -30,6 +31,7 @@ def build_tiny_model():
 
 
 def check_scheduler():
+    """用人工请求状态检查 Prefill 计划和游标推进，核对本章预算约束。"""
     spec = make_request_specs([list(range(1, 10))], [3])[0]
     state = RequestState(spec)
     full = ChunkedPrefillScheduler(SchedulerConfig("full", 2, 4))
@@ -52,6 +54,7 @@ def check_scheduler():
 
 
 def check_engine():
+    """用微型模型对照本章两种引擎策略的输出，并检查相应调度与缓存指标。"""
     torch.manual_seed(7)
     device = torch.device("cpu")
     model = build_tiny_model()
@@ -90,6 +93,9 @@ def check_engine():
 
 
 def main():
+    """运行本章的小规模 CPU 冒烟检查，验证核心数据流、状态或输出一致性。
+
+    使用本地微型模型或测试替身，不下载真实模型；通过这些检查不等于 GPU 性能验证。"""
     check_scheduler()
     full, chunked = check_engine()
     print("Smoke test 通过")

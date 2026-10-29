@@ -25,7 +25,10 @@ PRE_TOKEN_PATTERN = regex.compile(
 
 
 def build_byte_to_unicode():
-    """建立可逆的 byte 到 Unicode 字符映射。"""
+    """建立 256 个字节与 Unicode 字符的一一映射。
+
+    普通可见字节尽量保留原字符，其余字节映射到额外码点；这样 BPE 可处理
+    任意 UTF-8 字节序列，而不会把空白或控制字节误当成分隔规则。"""
 
     visible_bytes = list(range(ord("!"), ord("~") + 1))
     visible_bytes += list(range(ord("¡"), ord("¬") + 1))
@@ -46,9 +49,15 @@ def build_byte_to_unicode():
 
 
 class Qwen3Tokenizer:
-    """从 tokenizer.json 加载词表和 BPE 合并规则。"""
+    """直接读取词表和合并顺序，实现字节级 BPE 编码与解码。
+
+    先用正则划分普通文本，再按 merges 的优先级合并字节符号；特殊 token
+    绕过普通 BPE。这里的聊天模板只覆盖本教程支持的消息形式。"""
 
     def __init__(self, model_directory):
+        """读取 tokenizer.json，建立词表、反向词表、合并优先级和特殊 token 索引。
+
+        特殊 token 按长度降序构造匹配规则，避免短标记优先截断更长的标记。"""
         tokenizer_path = Path(model_directory) / "tokenizer.json"
         if not tokenizer_path.is_file():
             raise FileNotFoundError("没有找到 tokenizer 配置: " + str(tokenizer_path))
@@ -94,7 +103,10 @@ class Qwen3Tokenizer:
         self.eos_token_id = self.added_token_to_id["<|im_end|>"]
 
     def bpe(self, byte_text):
-        """按照 merge 优先级，把字符序列逐步合并成词表 Token。"""
+        """反复合并当前相邻符号中 rank 最小的一对，直到没有可用的合并规则。
+
+        rank 来自词表训练后的 merges 顺序，不是当前文本中的频率；合并结果缓存
+        在 bpe_cache 中，重复文本片段可以直接复用。"""
 
         if byte_text in self.bpe_cache:
             return self.bpe_cache[byte_text]
@@ -131,11 +143,12 @@ class Qwen3Tokenizer:
                     index += 1
             pieces = merged_pieces
 
+        # 缓存的是字节片段到 BPE 符号的映射，重复片段不必重新执行合并循环。
         self.bpe_cache[byte_text] = pieces
         return pieces
 
     def encode_ordinary_text(self, text):
-        """编码一段不包含 added token 的普通文本。"""
+        """对普通文本做 NFC 规范化、正则预切分和 UTF-8 字节映射，再用 BPE 查出 token ID。"""
 
         token_ids = []
         normalized_text = unicodedata.normalize("NFC", text)
@@ -169,12 +182,16 @@ class Qwen3Tokenizer:
         return token_ids
 
     def decode(self, token_ids, skip_special_tokens=False):
-        """把 Token IDs 还原为 UTF-8 文本。"""
+        """将 token ID 还原成文本，并按选项跳过特殊标记。
+
+        普通 token 必须先拼接成完整字节序列再解码 UTF-8；一个汉字可能跨多个 token，
+        逐 token 解码会错误地拆开多字节字符。"""
 
         output_parts = []
         ordinary_tokens = []
 
         def flush_ordinary_tokens():
+            """把已收集的普通符号合并为字节流并解码，随后清空临时列表。"""
             if not ordinary_tokens:
                 return
 
@@ -223,7 +240,7 @@ class Qwen3Tokenizer:
         return "".join(prompt_parts)
 
     def encode_chat_prompt(self, prompt):
-        """把单轮用户问题直接转换为模型输入 Token IDs。"""
+        """将单条用户提示包装为聊天模板后编码，使推理入口不必手工拼接特殊标记。"""
 
         messages = [{"role": "user", "content": prompt}]
         prompt_text = self.apply_chat_template(messages, add_generation_prompt=True)

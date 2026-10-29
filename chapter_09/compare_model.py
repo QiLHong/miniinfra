@@ -16,6 +16,7 @@ from scheduler import make_request_specs
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="真实模型 Attention 后端正确性比较")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -25,11 +26,13 @@ def parse_args():
 
 
 def make_sequence(length, vocab_size, salt):
+    """按目标长度构造可重复的 token 序列，控制实验输入长度而不依赖生成内容。"""
     values = torch.arange(length, dtype=torch.long)
     return ((values * (7919 + salt) + 17 + salt) % (vocab_size - 1) + 1).tolist()
 
 
 def main():
+    """在模型层面对照两种 Attention 后端，核对 Prefill/Decode 的 logits 和输出。"""
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("真实模型比较需要 NVIDIA GPU")

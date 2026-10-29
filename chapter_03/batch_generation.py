@@ -8,11 +8,15 @@ from qwen3_model import cache_size_bytes
 
 
 def synchronize(device):
+    """CUDA 设备上等待已提交工作完成，CPU 路径直接返回。
+
+    GPU 调用通常异步返回；在主机计时边界同步，才能把实际执行时间纳入测量。"""
     if device.type == "cuda":
         torch.cuda.synchronize(device)
 
 
 def percentile(values, percent):
+    """对样本排序后按 nearest-rank 规则取分位数；空样本返回 0。"""
     if not values:
         return 0.0
     ordered = sorted(values)
@@ -21,7 +25,10 @@ def percentile(values, percent):
 
 
 def left_pad_sequences(token_sequences, pad_token_id, device):
-    """把一组非空的一维 Token 序列左 Padding 为矩形 Tensor。"""
+    """将不等长提示左补齐为矩形输入，同时返回有效位置 Mask、逻辑位置编号和原始长度。
+
+    左补齐使各请求最后一个有效 token 对齐到末列；位置编号由 Mask 累加生成，
+    避免把 Padding 算入 RoPE 的真实位置。"""
 
     if not token_sequences:
         raise ValueError("token_sequences 不能为空")
@@ -61,6 +68,7 @@ def left_pad_sequences(token_sequences, pad_token_id, device):
 
 
 def _normalize_budgets(max_new_tokens, batch_size, device):
+    """把统一输出上限或逐请求上限转换成设备上的整数向量，并要求每项为正数。"""
     if isinstance(max_new_tokens, int):
         budgets = [max_new_tokens] * batch_size
     else:
@@ -78,6 +86,7 @@ def _timed_step(
     past_key_values,
     device,
 ):
+    """同步计时一次带历史缓存的批次前向，返回下一 token、末位置 logits 与新缓存。"""
     synchronize(device)
     start_time = time.perf_counter()
     logits, present = model(

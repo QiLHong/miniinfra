@@ -15,6 +15,7 @@ from cache_protocol import receive_message, send_message
 
 @dataclass
 class CacheEntry:
+    """保存不可变 K/V 字节及其逻辑身份、父依赖、形状、精度和最近访问顺序。"""
     digest: str
     parent_digest: str
     token_start: int
@@ -29,7 +30,11 @@ class CacheEntry:
 
 
 class CacheStore:
+    """以固定字节容量管理外部 Chunk，使用锁保护并发请求下的元数据一致性。
+
+    淘汰只选择无子节点的叶子，并遵守当前发布请求的祖先保护集合。"""
     def __init__(self, capacity_bytes):
+        """建立条目索引、父子关系、容量计数和互斥锁，初始缓存为空。"""
         if capacity_bytes < 1:
             raise ValueError("capacity_bytes 必须大于 0")
         self.capacity_bytes = int(capacity_bytes)
@@ -47,10 +52,12 @@ class CacheStore:
         self.lock = threading.Lock()
 
     def _touch(self, entry):
+        """推进逻辑访问时钟，记录条目最近使用次序，供 LRU 选择淘汰对象。"""
         self.clock += 1
         entry.last_access = self.clock
 
     def _remove(self, digest):
+        """删除条目并同步维护字节占用和父子索引；调用方先保证它可被淘汰。"""
         entry = self.entries.pop(digest)
         self.used_bytes -= len(entry.payload)
         self.children.pop(digest, None)
@@ -61,6 +68,7 @@ class CacheStore:
         self.eviction_count += 1
 
     def _make_room(self, required, protected):
+        """逐个淘汰未受保护的最旧叶子，直到能容纳新内容；无可淘汰条目时返回 False。"""
         if required > self.capacity_bytes:
             return False
         while self.used_bytes + required > self.capacity_bytes:
@@ -75,6 +83,7 @@ class CacheStore:
 
     @staticmethod
     def _matches(entry, requested):
+        """除摘要外再次比对父摘要、token 数及可选 token 内容，防止错误身份被当作命中。"""
         return (
             entry.digest == requested["digest"]
             and entry.parent_digest == requested.get("parent_digest", "")
@@ -86,6 +95,7 @@ class CacheStore:
         )
 
     def lookup(self, requested):
+        """在锁内从根开始检查连续 Chunk 链，首个缺失或不匹配处停止并返回命中数。"""
         with self.lock:
             self.lookup_count += 1
             parent = ""
@@ -104,6 +114,9 @@ class CacheStore:
             return count
 
     def load(self, requested):
+        """重新验证整条请求链与 payload 校验和，更新访问顺序后返回条目。
+
+        先前 lookup 成功不保证此刻还存在，因此加载阶段不能跳过检查。"""
         with self.lock:
             entries = []
             parent = ""
@@ -123,6 +136,10 @@ class CacheStore:
             return entries
 
     def store(self, request, payload):
+        """校验 payload 与身份，处理重复发布并腾出容量，再登记不可变条目。
+
+        父 Chunk 必须已存在；同一键对应不同内容会报错，容量不足返回 no_space，
+        不会通过覆盖旧内容伪装为成功。"""
         checksum = hashlib.sha256(payload).hexdigest()
         if checksum != request["checksum"]:
             raise ValueError("Store Payload 校验和不一致")
@@ -174,12 +191,14 @@ class CacheStore:
             return "stored"
 
     def clear(self):
+        """在锁内清空条目和父子关系、归零当前占用；累计实验计数仍保留。"""
         with self.lock:
             self.entries.clear()
             self.children.clear()
             self.used_bytes = 0
 
     def stats(self):
+        """在锁内生成容量、命中、发布与淘汰统计快照，避免读到一半更新的元数据。"""
         with self.lock:
             return {
                 "capacity_bytes": self.capacity_bytes,
@@ -197,7 +216,9 @@ class CacheStore:
 
 
 class CacheRequestHandler(socketserver.BaseRequestHandler):
+    """把一条网络请求分派到缓存存储操作，并统一编码成功响应或异常信息。"""
     def handle(self):
+        """接收一次协议消息，按 op 调用 CacheStore，再发送元数据与可选二进制结果。"""
         try:
             request, payload = receive_message(self.request)
             operation = request.get("op")
@@ -239,15 +260,18 @@ class CacheRequestHandler(socketserver.BaseRequestHandler):
 
 
 class ThreadedCacheServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    """为连接使用独立处理线程的 TCP 服务；共享缓存的数据一致性由 CacheStore 的锁保证。"""
     allow_reuse_address = True
     daemon_threads = True
 
     def __init__(self, address, capacity_bytes):
+        """绑定监听地址和请求处理器，并创建本服务独享的固定容量缓存。"""
         super().__init__(address, CacheRequestHandler)
         self.cache_store = CacheStore(capacity_bytes)
 
 
 def main():
+    """解析监听地址和容量，启动 CPU 缓存服务；该进程只管理字节，不加载模型。"""
     parser = argparse.ArgumentParser(description="第 14 期外部 KV Cache Service")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=65432)

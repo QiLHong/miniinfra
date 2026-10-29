@@ -18,6 +18,7 @@ from handoff_protocol import HandoffClient
 
 
 def common_record(args, device, dtype):
+    """生成工作进程共享的环境与配置记录，便于核对两端是否使用相同实验条件。"""
     return {
         "role": args.role,
         "environment": environment_record(args.model, args.revision, device, dtype),
@@ -34,6 +35,9 @@ def common_record(args, device, dtype):
 
 
 def run_producer(args, model, token_ids, device, dtype):
+    """执行 Prefill、发布 K/V，并等待接收确认或回退后释放本地及服务端资源。
+
+    发布成功只说明服务收到字节；不能在接收端完成导入前释放仍需保留的交接状态。"""
     client = HandoffClient(port=args.port, timeout=args.timeout)
     namespace = build_namespace(
         args.model, args.revision, model, dtype, args.block_size
@@ -85,6 +89,7 @@ def run_producer(args, model, token_ids, device, dtype):
 
 
 def run_decoder(args, model, token_ids, device, dtype):
+    """接收并验证 K/V，导入成功后确认并继续 Decode；验证失败则报告回退并重新计算。"""
     client = HandoffClient(port=args.port, timeout=args.timeout)
     expected_namespace = build_namespace(
         args.model, args.revision, model, dtype, args.block_size
@@ -104,6 +109,7 @@ def run_decoder(args, model, token_ids, device, dtype):
     acknowledged = False
 
     def acknowledge():
+        """在导入完成的回调中发送 ACK，并记录确认耗时与本地已确认标志。"""
         nonlocal ack_ms, acknowledged
         start_ack = time.perf_counter()
         client.acknowledge(args.request_id, args.attempt_id, True)
@@ -138,6 +144,7 @@ def run_decoder(args, model, token_ids, device, dtype):
 
 
 def main():
+    """解析进程角色并进入 Prefill 生产端或 Decode 接收端，记录交接生命周期与结果。"""
     parser = argparse.ArgumentParser()
     add_model_arguments(parser)
     parser.add_argument(

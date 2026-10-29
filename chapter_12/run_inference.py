@@ -23,6 +23,7 @@ ADMISSION_MODES = ("incremental", "conservative")
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="运行抢占式换出推理")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -43,6 +44,7 @@ def parse_args():
 
 
 def main():
+    """读取命令行配置、加载模型并运行本章推理路径，最后展示生成结果及相关指标。"""
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("真实权重推理需要可用的 NVIDIA GPU")

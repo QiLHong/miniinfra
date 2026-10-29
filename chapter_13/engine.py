@@ -19,6 +19,9 @@ from transfer import KVTransferManager, TRANSFER_MODES
 
 
 def _free_slots(prefilling, running, swapping_in, capacity):
+    """查找尚未被 Prefill、Decode 或正在换入的请求占用的槽位。
+
+    换入未完成的请求仍需保留槽位，不能因为暂时没有执行模型就分配给其他请求。"""
     used = {
         state.slot_index
         for state in prefilling + running + [item[0] for item in swapping_in]
@@ -28,6 +31,7 @@ def _free_slots(prefilling, running, swapping_in, capacity):
 
 
 def _next_phase_is_decode(scheduler, prefilling, running):
+    """根据调度器上一阶段及现有队列预测下一阶段，用于安排传输等待时机。"""
     if running and scheduler.last_phase == "prefill":
         return True
     if prefilling:
@@ -36,6 +40,9 @@ def _next_phase_is_decode(scheduler, prefilling, running):
 
 
 def _transfer_metrics(resource_events, transfer_mode):
+    """汇总传输设备耗时、主机提交耗时和显式等待耗时。
+
+    “未暴露为等待的时间”只是这里的记账差值，不是通过时间线证明的 GPU 重叠率。"""
     transfers = [
         event for event in resource_events
         if event["type"] in ("swap_out", "swap_in")
@@ -317,6 +324,7 @@ def run_engine(
                 clock_ms += wait_ms
                 continue
             if waiting and all(state.spec.arrival_ms > clock_ms for state in waiting):
+                # 没有可运行工作时，把模拟时间推进到下一次请求到达，避免空转循环。
                 clock_ms = min(state.spec.arrival_ms for state in waiting)
                 continue
             raise RuntimeError(

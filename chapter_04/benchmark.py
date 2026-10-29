@@ -24,6 +24,7 @@ from qwen3_model import (
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="Continuous Batching 受控实验")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -47,11 +48,13 @@ def parse_args():
 
 
 def make_sequence(length, vocab_size, salt):
+    """按目标长度构造可重复的 token 序列，控制实验输入长度而不依赖生成内容。"""
     values = torch.arange(length, dtype=torch.long)
     return ((values * (7919 + salt) + 17 + salt) % (vocab_size - 1) + 1).tolist()
 
 
 def build_specs(model, lengths, budgets, arrivals=None):
+    """按本实验设定的提示长度、输出预算与到达时间构造固定请求列表。"""
     sequences = [
         make_sequence(length, model.config.vocab_size, 23 * (index + 1))
         for index, length in enumerate(lengths)
@@ -60,10 +63,14 @@ def build_specs(model, lengths, budgets, arrivals=None):
 
 
 def mean(values):
+    """求样本的算术平均值；调用方应提供非空样本。"""
     return sum(values) / len(values)
 
 
 def summarize(mode, runs):
+    """汇总本组重复测量，保留脚本所需的均值、分位数或资源指标。
+
+    单位沿用输入字段；多次运行的分位数平均值与合并原始样本后重算的分位数不同。"""
     metrics = [run["metrics"] for run in runs]
     keys = [
         "makespan_ms",
@@ -114,6 +121,7 @@ def summarize(mode, runs):
 
 
 def system_environment(device):
+    """记录软件和硬件环境，帮助解释不同机器或版本之间的性能差异。"""
     try:
         driver = subprocess.run(
             [
@@ -156,6 +164,7 @@ def system_environment(device):
 
 
 def run_case(args, model, device, name, specs, max_running=None):
+    """在同一请求集上运行对照模式，预热后交替执行顺序并汇总重复结果。"""
     maximum = max_running or args.max_running_requests
     functions = {
         "fixed": run_fixed_batching,
@@ -210,6 +219,7 @@ def run_case(args, model, device, name, specs, max_running=None):
 
 
 def main():
+    """按本章定义的输入规模运行预热与重复测量，汇总延迟、吞吐和资源指标。"""
     args = parse_args()
     positive_integers = [
         args.max_running_requests,

@@ -23,6 +23,7 @@ from qwen3_model import (
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="GPU/CPU KV 块传输微基准")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -38,6 +39,7 @@ def parse_args():
 
 
 def block_shape(config, block_size):
+    """返回单物理块的 [层, K/V, KV头, 块内token, 每头维度]，据此构造复制数据。"""
     return (
         config.num_hidden_layers, 2, config.num_key_value_heads,
         block_size, config.head_dim,
@@ -61,6 +63,7 @@ def timed_loop_copy(dst_blocks, src_blocks, count, device, repeats):
 
 
 def timed_flat_copy(dst, src, elements, device, repeats):
+    """用 CUDA Event 重复测量一次连续区间复制，返回各次毫秒耗时。"""
     timings = []
     for _ in range(repeats):
         start = torch.cuda.Event(enable_timing=True)
@@ -75,6 +78,7 @@ def timed_flat_copy(dst, src, elements, device, repeats):
 
 
 def stats(values):
+    """对传输时间样本统计均值、总体标准差和最小/最大值，所有字段单位均为毫秒。"""
     ordered = sorted(values)
     return {
         "mean_ms": sum(ordered) / len(ordered),
@@ -85,6 +89,7 @@ def stats(values):
 
 
 def main():
+    """比较逐块与连续缓冲的 CPU/GPU 复制，记录方向、数据量、耗时和带宽。"""
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("传输微基准需要可用的 NVIDIA GPU")

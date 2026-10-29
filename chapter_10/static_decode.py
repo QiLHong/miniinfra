@@ -26,6 +26,9 @@ class StaticPagedKVCache:
     """
 
     def __init__(self, config, capacity, context_bucket, block_size, device, dtype):
+        """提前为每个槽位预留整个上下文桶，并另分配一个接收无效写入的 sink 块。
+
+        这样块表宽度和底层地址在图重放时固定；代价是空槽和短请求也占预留容量。"""
         if capacity < 1:
             raise ValueError("capacity 必须大于 0")
         if context_bucket < 1:
@@ -67,6 +70,7 @@ class StaticPagedKVCache:
 
     @property
     def bytes_per_block(self):
+        """计算一个包含所有层 K/V 的物理块所需的字节数。"""
         values = (
             self.config.num_hidden_layers
             * 2
@@ -78,13 +82,18 @@ class StaticPagedKVCache:
 
     @property
     def pool_bytes(self):
+        """返回数据块与 sink 块共同占用的总池容量。"""
         return self.total_block_count * self.bytes_per_block
 
     @property
     def reserved_token_slots(self):
+        """统计为真实上下文预留的 token 槽位，不包含用于丢弃无效写入的 sink 块。"""
         return self.data_block_count * self.block_size
 
     def store_prompt(self, slot, prompt_cache):
+        """将单请求 Prefill 缓存逐块复制进指定槽位的固定块表。
+
+        这是图捕获外的准备步骤，可以读取 Python 整数块编号；重放阶段不重新分配块。"""
         if not 0 <= slot < self.capacity:
             raise IndexError("slot 超出范围")
         if len(prompt_cache) != self.config.num_hidden_layers:
@@ -115,6 +124,7 @@ class StaticPagedKVCache:
                 ].copy_(value[0, :, start:end, :])
 
     def dense_slot_cache(self, slot, logical_length):
+        """按指定逻辑长度重建单槽的逐层稠密 K/V，用于与常规模型路径逐项比较。"""
         block_count = math.ceil(logical_length / self.block_size)
         block_ids = self.block_table[slot:slot + 1, :block_count]
         result = []
@@ -150,6 +160,7 @@ class StaticDecodeRunner:
         block_size=16,
         pad_token_id=0,
     ):
+        """分配固定地址的输入、位置、长度、活跃掩码、输出和块池，供 eager 与图重放共用。"""
         self.model = model
         self.config = model.config
         self.device = next(model.parameters()).device
@@ -211,6 +222,7 @@ class StaticDecodeRunner:
 
     @property
     def static_buffer_bytes(self):
+        """统计固定控制与输入输出张量的字节数；大型 K/V 块池由 pool_bytes 单独报告。"""
         tensors = (
             self.input_ids,
             self.position_ids,
@@ -226,6 +238,9 @@ class StaticDecodeRunner:
         return sum(tensor.numel() * tensor.element_size() for tensor in tensors)
 
     def _write_layer_token(self, layer_index, key, value):
+        """将有效槽的新 K/V 写到逻辑末尾，无效槽写到专用 sink 块。
+
+        地址选择全部在设备张量上进行，避免在捕获路径中依赖 .item() 或动态 Python 分支。"""
         logical_blocks = torch.div(
             self.sequence_lengths, self.block_size, rounding_mode="floor"
         )
@@ -233,6 +248,7 @@ class StaticDecodeRunner:
         physical_blocks = self.cache.block_table[
             self.slot_indices, logical_blocks
         ]
+        # 活跃槽写真实块，无效槽写专用 sink 块；用设备上的选择替代依赖 Python 的动态分支。
         write_blocks = torch.where(
             self.active_mask, physical_blocks, self.cache.sink_block_ids
         )
@@ -247,6 +263,7 @@ class StaticDecodeRunner:
         ] = value[:, :, 0, :]
 
     def _read_layer_bucket(self, layer_index):
+        """按固定块表收集整桶 K/V，输出长度保持 context_bucket，实际有效范围由 Mask 限制。"""
         block_ids = self.cache.block_table
         key = self.cache.blocks[layer_index, 0, block_ids]
         value = self.cache.blocks[layer_index, 1, block_ids]
@@ -265,6 +282,10 @@ class StaticDecodeRunner:
         return key, value
 
     def _decode_step(self):
+        """执行固定批大小的一次 Decode，并原位更新下一轮输入、位置、长度及输出缓冲。
+
+        每层先写入本轮 K/V，再读取固定上下文桶做 Attention；空槽通过 active_mask
+        屏蔽。固定形状加原位更新使同一段操作可被 CUDA Graph 捕获并反复重放。"""
         hidden_states = self.model.model.embed_tokens(self.input_ids)
         cosine, sine = self.model.model.rotary_emb(
             self.position_ids, hidden_states.dtype
@@ -338,8 +359,10 @@ class StaticDecodeRunner:
             torch.full_like(next_tokens, self.pad_token_id),
         )
         self.last_logits.copy_(logits)
+        # 输出复用同一缓冲，下次重放会覆盖；要保存完整输出历史，需要在调用方复制。
         self.output_tokens.copy_(next_tokens)
         self.input_ids[:, 0].copy_(next_tokens)
+        # 只为活跃请求推进长度，空槽保持不变；原位修改使图重放继续使用固定地址。
         self.sequence_lengths.add_(self.active_mask.to(torch.long))
         self.position_ids[:, 0].copy_(
             torch.where(
@@ -351,6 +374,9 @@ class StaticDecodeRunner:
 
     @torch.inference_mode()
     def prepare_prompts(self, prompt_token_ids):
+        """在捕获路径外完成每个提示的 Prefill，将首 token 和对应长度填入固定缓冲。
+
+        返回首 token 列表；这些 token 将作为下一次 step 的输入，尚未写入缓存。"""
         if len(prompt_token_ids) < 1:
             raise ValueError("至少需要一条 Prompt")
         if len(prompt_token_ids) > self.capacity:
@@ -398,6 +424,10 @@ class StaticDecodeRunner:
 
     @torch.inference_mode()
     def capture(self, warmup_steps=3):
+        """用无活跃槽的状态预热并捕获一次 _decode_step，记录捕获时间和内存增量。
+
+        捕获会重置输入及长度；真实请求需随后通过 prepare_prompts 填入。预热使用
+        独立流并建立等待关系，确保捕获开始前相关工作已经完成。"""
         if self.device.type != "cuda":
             raise RuntimeError("CUDA Graph 只能在 CUDA 设备上捕获")
         if warmup_steps < 1:
@@ -409,6 +439,7 @@ class StaticDecodeRunner:
         self.active_mask.zero_()
         current_stream = torch.cuda.current_stream(self.device)
         warmup_stream = torch.cuda.Stream(device=self.device)
+        # 先建立流依赖，确保预热不会抢在当前流的初始化操作之前读取缓冲。
         warmup_stream.wait_stream(current_stream)
         with torch.cuda.stream(warmup_stream):
             for _ in range(warmup_steps):
@@ -420,6 +451,7 @@ class StaticDecodeRunner:
         reserved_before = torch.cuda.memory_reserved(self.device)
         start = time.perf_counter()
         self.graph = torch.cuda.CUDAGraph()
+        # 捕获的是固定地址与形状上的操作序列；之后只更新缓冲内容并 replay。
         with torch.cuda.graph(self.graph):
             self._decode_step()
         torch.cuda.synchronize(self.device)
@@ -438,6 +470,9 @@ class StaticDecodeRunner:
 
     @torch.inference_mode()
     def step(self, mode):
+        """检查容量后执行一次 static_eager 或图重放，返回固定输出缓冲。
+
+        返回张量下次 step 会被覆盖；需要保留历史输出的调用方应自行复制。"""
         if mode not in self.MODES:
             raise ValueError("mode 必须是 static_eager 或 cuda_graph")
         if self.remaining_decode_steps < 1:
@@ -452,6 +487,7 @@ class StaticDecodeRunner:
         return self.output_tokens
 
     def snapshot(self):
+        """汇总静态桶容量、活跃槽数、预留内存与捕获成本，便于解释图加速的额外代价。"""
         return {
             "capacity": self.capacity,
             "active_count": self.active_count,

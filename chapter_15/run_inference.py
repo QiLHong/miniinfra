@@ -13,6 +13,7 @@ from qwen3_tokenizer import Qwen3Tokenizer
 
 
 def main():
+    """读取命令行配置、加载模型并运行本章推理路径，最后展示生成结果及相关指标。"""
     parser = argparse.ArgumentParser(description="第 15 期自然语言推理演示")
     add_model_arguments(parser)
     parser.add_argument("--prompt", default="请用一句话解释 Prefill 和 Decode 的区别。")

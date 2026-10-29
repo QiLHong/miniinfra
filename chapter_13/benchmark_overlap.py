@@ -9,6 +9,7 @@ from experiment_utils import collect_environment, save_results, seed_everything
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="KV 传输/计算重叠微基准")
     parser.add_argument("--blocks", default="16,64,128")
     parser.add_argument("--matrix-size", type=int, default=2048)
@@ -20,10 +21,14 @@ def parse_args():
 
 
 def mean(values):
+    """求样本的算术平均值；调用方应提供非空样本。"""
     return statistics.mean(values)
 
 
 def summarize(rows):
+    """汇总本组重复测量，保留脚本所需的均值、分位数或资源指标。
+
+    单位沿用输入字段；多次运行的分位数平均值与合并原始样本后重算的分位数不同。"""
     keys = rows[0]
     return {
         key + "_mean": mean([row[key] for row in rows])
@@ -32,6 +37,7 @@ def summarize(rows):
 
 
 def run_case(block_count, direction, matrix_size, compute_repeats):
+    """构造固定计算与块复制负载，比较独立执行和不同组合方式的测量结果。"""
     device = torch.device("cuda")
     # Qwen3-0.6B，Block Size 16：每块 28×K/V×8×16×128×2B = 1.75 MiB。
     gpu_blocks = torch.randn(
@@ -53,6 +59,7 @@ def run_case(block_count, direction, matrix_size, compute_repeats):
     copy_stream = torch.cuda.Stream(device=device)
 
     def copies(stream):
+        """在指定 CUDA 流中按方向提交逐块非阻塞复制，完成等待由外层测量流程负责。"""
         with torch.cuda.stream(stream):
             for index in range(block_count):
                 if direction == "d2h":
@@ -61,6 +68,7 @@ def run_case(block_count, direction, matrix_size, compute_repeats):
                     gpu_blocks[index].copy_(cpu_blocks[index], non_blocking=True)
 
     def compute():
+        """重复矩阵乘并复用输出张量，提供可控制时长的计算负载。"""
         for _ in range(compute_repeats):
             torch.mm(left, right, out=output)
 
@@ -126,6 +134,7 @@ def run_case(block_count, direction, matrix_size, compute_repeats):
 
 
 def main():
+    """分别测量计算、复制及其组合，检查异步复制的可隐藏开销与资源竞争。"""
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("重叠微基准需要 NVIDIA GPU")

@@ -12,10 +12,12 @@ from experiment_utils import add_model_arguments, write_json
 
 
 def median(values):
+    """返回排序后样本的中位数，用于减少极端单次延迟对汇总的影响。"""
     return statistics.median(float(value) for value in values)
 
 
 def main():
+    """比较单进程执行与请求级 K/V 交接的成本，区分模型计算和跨进程搬运。"""
     parser = argparse.ArgumentParser(description="第 15 期 KV Handoff 基准")
     add_model_arguments(parser)
     parser.add_argument("--prompt-lengths", default="256,512,1024,2048")

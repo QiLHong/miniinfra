@@ -18,6 +18,7 @@ from scheduler import make_request_specs
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="Chunked Prefill 正确性实验")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -29,6 +30,7 @@ def parse_args():
 
 
 def compact_trace(run):
+    """抽取对照所需的调度轨迹字段，避免把耗时波动当作逻辑行为差异。"""
     return [
         {
             "iteration": event["iteration"],
@@ -44,6 +46,7 @@ def compact_trace(run):
 
 
 def main():
+    """对照完整 Prefill 与分块 Prefill 的首 token 分数和输出，核对游标及跨块追加。"""
     args = parse_args()
     if args.token_budget < 4 or args.block_size < 1:
         raise ValueError("Token Budget 至少为 4，Block Size 必须为正")

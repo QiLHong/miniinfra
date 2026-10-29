@@ -15,11 +15,15 @@ from paged_cache import PagedKVCache, paged_decode_forward
 
 
 def synchronize(device):
+    """CUDA 设备上等待已提交工作完成，CPU 路径直接返回。
+
+    GPU 调用通常异步返回；在主机计时边界同步，才能把实际执行时间纳入测量。"""
     if device.type == "cuda":
         torch.cuda.synchronize(device)
 
 
 def percentile(values, percent):
+    """对样本排序后按 nearest-rank 规则取分位数；空样本返回 0。"""
     if not values:
         return 0.0
     ordered = sorted(values)
@@ -28,6 +32,10 @@ def percentile(values, percent):
 
 
 def left_pad_sequences(token_sequences, pad_token_id, device):
+    """将不等长提示左补齐为矩形输入，同时返回有效位置 Mask、逻辑位置编号和原始长度。
+
+    左补齐使各请求最后一个有效 token 对齐到末列；位置编号由 Mask 累加生成，
+    避免把 Padding 算入 RoPE 的真实位置。"""
     if not token_sequences:
         raise ValueError("token_sequences 不能为空")
     normalized = []
@@ -58,12 +66,14 @@ def left_pad_sequences(token_sequences, pad_token_id, device):
 
 @dataclass(frozen=True)
 class RequestSpec:
+    """保存请求不可变的输入：标识、提示 token、最大输出数量和到达时间。"""
     request_id: str
     token_ids: tuple
     max_new_tokens: int
     arrival_ms: float = 0.0
 
     def validate(self):
+        """在进入调度队列前检查标识、非空提示、正输出预算及非负到达时间。"""
         if not self.request_id:
             raise ValueError("request_id 不能为空")
         if not self.token_ids:
@@ -76,6 +86,10 @@ class RequestSpec:
 
 @dataclass
 class RequestState:
+    """保存请求执行中的可变状态，与只描述输入的 RequestSpec 分开。
+
+    关注 generated、缓存长度、槽位和各阶段时间戳；生成的最后一个 token
+    通常还没有送入下一轮前向，因此输出长度不能直接当作已写入的缓存长度。"""
     spec: RequestSpec
     status: str = "waiting"
     generated: list = field(default_factory=list)
@@ -88,6 +102,7 @@ class RequestState:
 
 
 def make_request_specs(token_sequences, max_new_tokens, arrival_times_ms=None):
+    """把 token 序列、输出预算和到达时间对齐为 RequestSpec 列表，并逐个校验。"""
     sequences = [tuple(int(token) for token in sequence) for sequence in token_sequences]
     if isinstance(max_new_tokens, int):
         budgets = [max_new_tokens] * len(sequences)
@@ -113,6 +128,9 @@ def make_request_specs(token_sequences, max_new_tokens, arrival_times_ms=None):
 
 
 def _split_prefill_cache(past_key_values, prompt_lengths):
+    """按请求实际提示长度裁掉批内左 Padding，复制出独立的逐层 K/V。
+
+    每个请求保留批维度 1，避免后续请求释放或拼批时继续依赖整批缓存。"""
     request_caches = []
     for row, length in enumerate(prompt_lengths):
         request_caches.append([
@@ -126,6 +144,10 @@ def _split_prefill_cache(past_key_values, prompt_lengths):
 
 
 def _timed_prefill(model, states, pad_token_id, device):
+    """将完整提示左补齐后批量前向，选出各请求首 token，再拆出逐请求 K/V。
+
+    返回 token、独立缓存和总/模型/缓存整理耗时；这里只拆分 Prefill 结果，
+    持久槽位合并或分页池写入由调用方在后续步骤完成。"""
     input_ids, mask, positions, lengths = left_pad_sequences(
         [state.spec.token_ids for state in states], pad_token_id, device
     )
@@ -226,6 +248,9 @@ def _timed_dense_decode(
     pad_token_id,
     device,
 ):
+    """为固定容量的稠密槽位构造单 token 输入，再执行带历史缓存的 Decode。
+
+    空槽位用 Mask 屏蔽；只提取活跃请求的输出，输入准备时间和模型时间分别统计。"""
     synchronize(device)
     prepare_start = time.perf_counter()
     input_ids = torch.full(
@@ -235,7 +260,9 @@ def _timed_dense_decode(
     active = torch.zeros(capacity, dtype=torch.bool, device=device)
     for state in running:
         slot = state.slot_index
+        # 输入的是上一步已选出、但尚未写入 K/V 的 token；本轮计算再选出它后面的 token。
         input_ids[slot, 0] = state.generated[-1]
+        # RoPE 位置使用逻辑有效长度，不能用物理块编号或含 Padding 的张量列数替代。
         position_ids[slot, 0] = state.cache_length
         active[slot] = True
     attention_mask = torch.cat((history_mask, active.unsqueeze(1)), dim=1)
@@ -266,11 +293,15 @@ def _timed_dense_decode(
 
 
 def _record_tokens(states, token_ids, token_time_ms, eos_token_id, stop_on_eos):
+    """为本轮请求记录新 token 和时间戳，遇到 EOS 或输出预算用尽时标记完成。
+
+    只更新请求输出状态，物理缓存释放由引擎单独执行；首 token 时间只设置一次。"""
     completed = []
     for state, token_id in zip(states, token_ids):
         state.generated.append(int(token_id))
         state.token_times_ms.append(token_time_ms)
         if state.first_token_ms is None:
+            # 首 token 时间只记录第一次，后续 token 时间写入列表用于计算 ITL。
             state.first_token_ms = token_time_ms
         reached_eos = stop_on_eos and token_id == eos_token_id
         reached_budget = len(state.generated) >= state.spec.max_new_tokens
@@ -284,6 +315,10 @@ def _record_tokens(states, token_ids, token_time_ms, eos_token_id, stop_on_eos):
 def _finalize(
     states, events, max_running_requests, peak_memory_bytes, extra_metrics=None
 ):
+    """从请求时间戳和迭代事件汇总吞吐、排队时间、首 token 延迟和相邻 token 间隔。
+
+    TTFT 从请求到达到首 token 计算，ITL 来自同一请求相邻输出时间差；
+    这些指标包含的调度等待不同，不能用单次模型前向耗时互相替代。"""
     ordered = list(states)
     first_arrival = min(state.spec.arrival_ms for state in ordered)
     last_completion = max(state.completion_ms for state in ordered)
@@ -517,6 +552,7 @@ def run_dense_cache(
             })
             continue
 
+        # 没有可运行工作时，把模拟时间推进到下一次请求到达，避免空转循环。
         clock_ms = min(state.spec.arrival_ms for state in waiting)
 
     peak_memory = (
@@ -526,6 +562,7 @@ def run_dense_cache(
 
 
 def _store_paged_prefill(cache, admitted, request_caches, device):
+    """把新准入请求的 Prefill 缓存逐个写入分页池；计时前后同步设备。"""
     synchronize(device)
     start = time.perf_counter()
     for state, request_cache in zip(admitted, request_caches):
@@ -535,6 +572,7 @@ def _store_paged_prefill(cache, admitted, request_caches, device):
 
 
 def _release_paged(cache, completed_states, device):
+    """归还已完成请求的分页块并统计耗时；没有完成请求时返回零开销。"""
     if not completed_states:
         return 0.0
     synchronize(device)
@@ -548,6 +586,7 @@ def _release_paged(cache, completed_states, device):
 def _timed_paged_decode(
     model, running, cache, capacity, pad_token_id, device
 ):
+    """按槽位构造输入与请求 ID 映射，执行分页 Decode，并返回输出、分项耗时及访问量。"""
     synchronize(device)
     prepare_start = time.perf_counter()
     input_ids = torch.full(
@@ -557,7 +596,9 @@ def _timed_paged_decode(
     slot_request_ids = [None] * capacity
     for state in running:
         slot = state.slot_index
+        # 输入的是上一步已选出、但尚未写入 K/V 的 token；本轮计算再选出它后面的 token。
         input_ids[slot, 0] = state.generated[-1]
+        # RoPE 位置使用逻辑有效长度，不能用物理块编号或含 Padding 的张量列数替代。
         position_ids[slot, 0] = state.cache_length
         slot_request_ids[slot] = state.spec.request_id
     synchronize(device)
@@ -711,6 +752,7 @@ def run_paged_cache(
             })
             continue
 
+        # 没有可运行工作时，把模拟时间推进到下一次请求到达，避免空转循环。
         clock_ms = min(state.spec.arrival_ms for state in waiting)
 
     peak_memory = (
@@ -761,6 +803,7 @@ def run_fixed_batching(
     while waiting:
         ready = [state for state in waiting if state.spec.arrival_ms <= clock_ms]
         if not ready:
+            # 没有可运行工作时，把模拟时间推进到下一次请求到达，避免空转循环。
             clock_ms = min(state.spec.arrival_ms for state in waiting)
             ready = [state for state in waiting if state.spec.arrival_ms <= clock_ms]
         wave = ready[:max_running_requests]

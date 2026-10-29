@@ -16,6 +16,7 @@ from static_decode import StaticDecodeRunner
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--capacity", type=int, default=1)
@@ -30,6 +31,7 @@ def parse_args():
 
 
 def profile_one_step(runner, prompts, mode):
+    """只分析一次已准备好的 Decode，收集 CUDA 提交事件与主要 CPU 开销。"""
     runner.prepare_prompts(prompts)
     torch.cuda.synchronize(runner.device)
     with torch.profiler.profile(
@@ -82,6 +84,7 @@ def profile_one_step(runner, prompts, mode):
 
 
 def main():
+    """用 profiler 观察 eager 与图重放的提交活动，导出便于核对启动开销的记录。"""
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("Profiler 实验需要 NVIDIA CUDA GPU")

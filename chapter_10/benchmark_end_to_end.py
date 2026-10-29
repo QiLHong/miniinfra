@@ -18,6 +18,7 @@ from static_decode import StaticDecodeRunner
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--prompt-length", type=int, default=2048)
@@ -33,6 +34,7 @@ def parse_args():
 
 
 def run_sample(runner, prompt, mode, max_new_tokens):
+    """测量一轮完整请求处理，按路径分别记录准备、Prefill 与 Decode 成本。"""
     decode_steps = max_new_tokens - 1
     torch.cuda.synchronize(runner.device)
     total_start = time.perf_counter()
@@ -63,6 +65,9 @@ def run_sample(runner, prompt, mode, max_new_tokens):
 
 
 def summarize(samples):
+    """汇总本组重复测量，保留脚本所需的均值、分位数或资源指标。
+
+    单位沿用输入字段；多次运行的分位数平均值与合并原始样本后重算的分位数不同。"""
     result = {"sample_count": len(samples)}
     for field in (
         "ttft_ms", "decode_ms", "tpot_ms", "end_to_end_ms",
@@ -75,6 +80,7 @@ def summarize(samples):
 
 
 def main():
+    """把 Prefill、准备及 Decode 纳入端到端测量，检查图重放收益是否覆盖额外成本。"""
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("端到端实验需要 NVIDIA CUDA GPU")

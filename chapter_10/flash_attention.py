@@ -55,8 +55,13 @@ if triton is not None:
         block_m: tl.constexpr,
         block_n: tl.constexpr,
     ):
+        """每个 Triton 程序计算一个批次/头中的一块 Query，循环扫描 Key/Value 块。
+
+        row_max、row_sum 和 accumulator 保存在线 Softmax 状态；每次更新最大值
+        时同时缩放旧分母和旧加权和，最后一次归一化即可得到结果，无需保存完整分数矩阵。"""
         query_block = tl.program_id(0)
         batch_head = tl.program_id(1)
+        # 第二个网格维度把 batch 和 head 合并编号，用整除/取余恢复它们。
         batch = batch_head // head_count
         head = batch_head % head_count
 
@@ -83,6 +88,7 @@ if triton is not None:
             other=0.0,
         )
 
+        # 每个 Query 行保存最大值、指数和及加权 V 累加器，替代完整的 Q×K 分数矩阵。
         row_max = tl.where(query_is_valid, -float("inf"), 0.0)
         row_sum = tl.zeros((block_m,), dtype=tl.float32)
         accumulator = tl.zeros((block_m, head_dim), dtype=tl.float32)
@@ -118,9 +124,11 @@ if triton is not None:
 
             tile_max = tl.max(scores, axis=1)
             new_max = tl.maximum(row_max, tile_max)
+            # 更换减去的最大值后，旧指数和与旧加权和都要乘 2^(旧最大值-新最大值)，保持同一尺度。
             correction = tl.exp2(row_max - new_max)
             probabilities = tl.exp2(scores - new_max[:, None])
             probabilities = tl.where(allowed, probabilities, 0.0)
+            # 在线 Softmax 分母：校正后的历史分母，加上当前 Key 块贡献。
             new_sum = row_sum * correction + tl.sum(probabilities, axis=1)
 
             value_pointers = (
@@ -135,11 +143,13 @@ if triton is not None:
                 mask=key_in_bounds[:, None],
                 other=0.0,
             )
+            # 分子也按同一比例校正，否则跨 Key 块拼接的概率权重会失真。
             accumulator = accumulator * correction[:, None]
             accumulator += tl.dot(probabilities.to(tl.bfloat16), value_tile)
             row_max = new_max
             row_sum = new_sum
 
+        # 扫描完全部 Key 块后统一除以分母，得到每个 Query 对 V 的加权平均。
         normalized = accumulator / row_sum[:, None]
         normalized = tl.where(query_is_valid[:, None], normalized, 0.0)
         output_pointers = (
@@ -157,6 +167,7 @@ if triton is not None:
 
 
 def _validate_inputs(query, key, value, key_valid, query_valid, causal_offset):
+    """核对手写内核支持的设备、精度、形状、掩码与步长，防止错误布局直接进入 GPU 内核。"""
     if triton is None:
         raise RuntimeError("FlashAttention 路径需要安装 Triton")
     if not query.is_cuda:

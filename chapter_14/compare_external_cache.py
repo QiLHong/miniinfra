@@ -16,10 +16,12 @@ from experiment_utils import (
 
 
 def synthetic_tokens(length, vocab_size):
+    """生成确定性的 token 序列，供实验控制上下文长度，不用于评价模型文本质量。"""
     return [1000 + ((index * 7919 + 17) % (vocab_size - 1000)) for index in range(length)]
 
 
 def serializable(result):
+    """将结果中的张量等对象转换为可写入 JSON 的表示，用于保存对照报告。"""
     return {
         "new_token_ids": result["new_token_ids"],
         "metrics": result["metrics"],
@@ -28,6 +30,7 @@ def serializable(result):
 
 
 def main():
+    """对照重算、冷外部缓存和热缓存路径，验证缓存复用后的结果一致性。"""
     parser = argparse.ArgumentParser(description="第 14 期外部 KV Cache 正确性实验")
     add_model_arguments(parser)
     parser.add_argument("--prompt-length", type=int, default=513)

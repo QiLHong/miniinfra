@@ -14,6 +14,7 @@ from speculative_decode import (
 
 
 def tiny_model(seed):
+    """创建供 CPU 冒烟测试使用的小模型，沿用真实前向结构但缩小计算规模。"""
     torch.manual_seed(seed)
     config = Qwen3Config(
         vocab_size=97,
@@ -34,6 +35,9 @@ def tiny_model(seed):
 
 
 def main():
+    """运行本章的小规模 CPU 冒烟检查，验证核心数据流、状态或输出一致性。
+
+    使用本地微型模型或测试替身，不下载真实模型；通过这些检查不等于 GPU 性能验证。"""
     assert longest_matching_prefix([1, 2, 3], [9, 2, 3]) == 0
     assert longest_matching_prefix([1, 2, 3], [1, 9, 3]) == 1
     assert longest_matching_prefix([1, 2, 3], [1, 2, 3]) == 3

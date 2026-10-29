@@ -14,6 +14,7 @@ from qwen3_tokenizer import Qwen3Tokenizer
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="验证 KV Cache 前后的逐 Token 正确性")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID, help="模型 ID 或本地目录")
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -36,6 +37,7 @@ def parse_args():
 
 @torch.inference_mode()
 def compare_step_by_step(model, input_ids, max_new_tokens, eos_token_id):
+    """每步同时运行完整上下文与增量缓存路径，比较末位置 logits、贪心 token 和缓存长度。"""
     generated_ids = input_ids
     cached_input = input_ids
     past_key_values = None
@@ -101,6 +103,7 @@ def compare_step_by_step(model, input_ids, max_new_tokens, eos_token_id):
 
 
 def main():
+    """对照完整上下文重算与 KV Cache 路径，逐步检查 logits 误差及生成 token。"""
     args = parse_args()
     if args.max_new_tokens < 1:
         raise ValueError("--max-new-tokens 必须大于 0")

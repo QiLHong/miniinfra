@@ -22,6 +22,7 @@ from scheduler import make_request_specs
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="Prefix Cache 共享长前缀主实验")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -39,11 +40,13 @@ def parse_args():
 
 
 def make_sequence(length, vocab_size, salt):
+    """按目标长度构造可重复的 token 序列，控制实验输入长度而不依赖生成内容。"""
     values = torch.arange(length, dtype=torch.long)
     return ((values * (7919 + salt) + 17 + salt) % (vocab_size - 1) + 1).tolist()
 
 
 def build_specs(args, model):
+    """按本实验设定的提示长度、输出预算与到达时间构造固定请求列表。"""
     common = make_sequence(args.common_prefix_length, model.config.vocab_size, 101)
     sequences = [
         common + make_sequence(
@@ -55,16 +58,21 @@ def build_specs(args, model):
 
 
 def clean_cuda(device):
+    """清理实验间不再使用的对象与 CUDA 缓存，减少上一组测量对下一组的影响。"""
     gc.collect()
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
 
 def mean(values):
+    """求样本的算术平均值；调用方应提供非空样本。"""
     return sum(values) / len(values)
 
 
 def summarize(mode, runs):
+    """汇总本组重复测量，保留脚本所需的均值、分位数或资源指标。
+
+    单位沿用输入字段；多次运行的分位数平均值与合并原始样本后重算的分位数不同。"""
     cold = [run["request_metrics"][0]["service_ttft_ms"] for run in runs]
     warm_samples = [
         value
@@ -109,10 +117,12 @@ def summarize(mode, runs):
 
 
 def reduction(baseline, candidate):
+    """相对基准计算下降幅度，用于描述延迟或开销减少；基准为零时单独处理。"""
     return 1 - candidate / baseline if baseline else None
 
 
 def system_environment(device):
+    """记录软件和硬件环境，帮助解释不同机器或版本之间的性能差异。"""
     try:
         driver = subprocess.run(
             ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
@@ -147,6 +157,7 @@ def system_environment(device):
 
 
 def main():
+    """用重复前缀负载测量缓存关闭、冷缓存与热缓存的处理成本和命中情况。"""
     args = parse_args()
     positive = [
         args.requests, args.common_prefix_length, args.private_suffix_length,
@@ -168,6 +179,7 @@ def main():
     namespace = args.model + "@" + args.revision
 
     def execute(enabled):
+        """在固定负载和容量下运行一次引擎，只由 enabled 决定是否使用前缀缓存。"""
         return run_engine(
             model, specs, 1, -1, device,
             token_budget=args.token_budget,

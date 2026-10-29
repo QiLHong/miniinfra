@@ -16,6 +16,7 @@ from static_decode import StaticDecodeRunner
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--dtype", choices=("bfloat16", "float16"), default="bfloat16")
@@ -32,6 +33,7 @@ def parse_args():
 
 
 def run_steps(runner, prompts, mode, steps):
+    """准备提示并逐步执行指定模式，复制保存输出、logits 和缓存切片用于后续比较。"""
     first = runner.prepare_prompts(prompts)
     sequences = [[token] for token in first]
     logits = []
@@ -57,6 +59,7 @@ def run_steps(runner, prompts, mode, steps):
 
 
 def maximum_cache_error(left, right):
+    """遍历请求和模型层，返回两份 K/V 缓存之间最大的绝对误差。"""
     maximum = 0.0
     for left_slot, right_slot in zip(left, right):
         for (left_key, left_value), (right_key, right_value) in zip(
@@ -71,6 +74,7 @@ def maximum_cache_error(left, right):
 
 
 def main():
+    """对照常规与静态 Decode、图重放路径的输出和缓存，检查固定桶没有改变计算含义。"""
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("正确性实验需要 NVIDIA CUDA GPU")

@@ -17,6 +17,7 @@ from qwen3_tokenizer import Qwen3Tokenizer
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="固定 Batch 数值与请求隔离实验")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -31,11 +32,13 @@ def parse_args():
 
 
 def synthetic_sequence(length, vocab_size, salt):
+    """生成指定长度的合成 token 输入，便于复现长度与 Padding 边界用例。"""
     values = torch.arange(length, dtype=torch.long)
     return ((values * (7919 + salt) + 17 + salt) % (vocab_size - 1) + 1).tolist()
 
 
 def compare_trace(reference, candidate, target_index):
+    """对齐串行参考与批内指定请求的逐步 logits，记录误差、首个分歧及候选分数间隔。"""
     step_count = min(
         len(reference["logits_trace"]), len(candidate["logits_trace"])
     )
@@ -96,6 +99,7 @@ def compare_trace(reference, candidate, target_index):
 
 
 def main():
+    """使用相同请求对照串行与固定批处理，检查 Padding 和不同输出长度下的结果一致性。"""
     args = parse_args()
     if args.max_new_tokens < 1 or args.logits_atol < 0:
         raise ValueError("输出长度必须大于 0，误差阈值不能小于 0")

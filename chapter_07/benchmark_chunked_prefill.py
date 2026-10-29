@@ -22,6 +22,7 @@ from scheduler import make_request_specs
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="Chunked Prefill 受控性能实验")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -43,11 +44,13 @@ def parse_args():
 
 
 def make_sequence(length, vocab_size, salt):
+    """按目标长度构造可重复的 token 序列，控制实验输入长度而不依赖生成内容。"""
     values = torch.arange(length, dtype=torch.long)
     return ((values * (7919 + salt) + 17 + salt) % (vocab_size - 1) + 1).tolist()
 
 
 def build_specs(args, model):
+    """按本实验设定的提示长度、输出预算与到达时间构造固定请求列表。"""
     lengths = [args.initial_prompt_length] * args.initial_requests + [
         args.long_prompt_length
     ]
@@ -61,10 +64,12 @@ def build_specs(args, model):
 
 
 def mean(values):
+    """求样本的算术平均值；调用方应提供非空样本。"""
     return sum(values) / len(values)
 
 
 def existing_itls(run, initial_requests):
+    """提取原有请求的相邻 token 间隔，用于衡量长提示插入后的 Decode 等待。"""
     values = []
     initial_ids = {str(index) for index in range(initial_requests)}
     for request in run["request_metrics"]:
@@ -99,6 +104,9 @@ SUMMARY_KEYS = [
 
 
 def summarize(mode, budget, runs, initial_requests):
+    """汇总本组重复测量，保留脚本所需的均值、分位数或资源指标。
+
+    单位沿用输入字段；多次运行的分位数平均值与合并原始样本后重算的分位数不同。"""
     row = {"mode": mode, "token_budget": budget}
     for key in SUMMARY_KEYS:
         row[key + "_mean"] = mean([run["metrics"][key] for run in runs])
@@ -148,20 +156,24 @@ def summarize(mode, budget, runs, initial_requests):
 
 
 def clean_cuda(device):
+    """清理实验间不再使用的对象与 CUDA 缓存，减少上一组测量对下一组的影响。"""
     gc.collect()
     if device.type == "cuda":
         torch.cuda.empty_cache()
 
 
 def relative_change(baseline, candidate):
+    """计算相对基准的变化量，便于对照不同实验配置；注意结果的正负方向。"""
     return candidate / baseline - 1 if baseline else None
 
 
 def reduction(baseline, candidate):
+    """相对基准计算下降幅度，用于描述延迟或开销减少；基准为零时单独处理。"""
     return 1 - candidate / baseline if baseline else None
 
 
 def system_environment(device):
+    """记录软件和硬件环境，帮助解释不同机器或版本之间的性能差异。"""
     try:
         driver = subprocess.run(
             ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
@@ -196,6 +208,7 @@ def system_environment(device):
 
 
 def main():
+    """比较完整与分块 Prefill，记录长提示对既有 Decode 请求延迟的影响。"""
     args = parse_args()
     positive = [
         args.max_running_requests,

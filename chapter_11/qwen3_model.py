@@ -26,6 +26,10 @@ DEFAULT_DRAFT_MODEL_ID = "Qwen/Qwen3-0.6B"
 
 @dataclass
 class Qwen3Config:
+    """保存模型结构参数；数值来自权重目录中的 config.json。
+
+    注意区分隐藏维度、Query 头数、KV 头数和每头维度。GQA 允许多个 Query 头
+    共享一组 K/V，因此 KV 头数通常少于 Query 头数。"""
     vocab_size: int
     hidden_size: int
     intermediate_size: int
@@ -40,6 +44,9 @@ class Qwen3Config:
 
     @classmethod
     def from_model_directory(cls, model_directory):
+        """从 config.json 提取本章实际使用的字段，并在返回配置前检查支持范围。
+
+        配置决定权重和中间张量的形状，不能只修改头数而继续使用不匹配的权重。"""
         with (Path(model_directory) / "config.json").open(
             "r", encoding="utf-8"
         ) as file:
@@ -61,6 +68,7 @@ class Qwen3Config:
         return config
 
     def validate(self):
+        """检查本章模型支持的配置约束，提前拒绝不兼容的头数或权重共享设置。"""
         if self.num_attention_heads % self.num_key_value_heads != 0:
             raise ValueError("Attention 头数必须能被 KV 头数整除")
         if not self.tie_word_embeddings:
@@ -68,9 +76,13 @@ class Qwen3Config:
 
 
 class ContiguousKVCache:
-    """单请求预分配 KV Cache；rollback 只移动逻辑长度。"""
+    """为单请求的每一层预分配连续 K/V，并用逻辑长度支持推测解码回滚。
+
+    容量 max_length 决定物理存储大小；length 决定哪些 token 已提交有效。
+    回滚只缩短逻辑长度，后续写入会覆盖被拒绝的候选，无需重新分配整份缓存。"""
 
     def __init__(self, config, max_length, device, dtype):
+        """为每层分配 [1, KV头数, 最大长度, 每头维度] 的 K 和 V，初始有效长度为 0。"""
         if max_length < 1:
             raise ValueError("max_length 必须大于 0")
         shape = (
@@ -92,18 +104,24 @@ class ContiguousKVCache:
 
     @property
     def bytes(self):
+        """统计预分配的全部 K/V 容量字节数，包含尚未写入的 token 槽位。"""
         return sum(
             tensor.numel() * tensor.element_size()
             for tensor in self.keys + self.values
         )
 
     def reset(self):
+        """把逻辑长度归零以复用存储；不清空底层张量，也不释放容量。"""
         self.length = 0
 
     def checkpoint(self):
+        """返回当前有效长度，作为后续拒绝候选时可回滚的检查点。"""
         return self.length
 
     def rollback(self, length):
+        """将有效长度缩回指定前缀，范围必须位于当前历史内。
+
+        尾部旧数据仍在内存中，但不再属于可读历史，下一次 write 会覆盖它。"""
         if not 0 <= length <= self.length:
             raise ValueError(
                 "只能回滚到 [0, %d]，收到 %d" % (self.length, length)
@@ -111,6 +129,10 @@ class ContiguousKVCache:
         self.length = length
 
     def write(self, layer_index, start, key, value):
+        """在当前逻辑末尾写入某一层的新 K/V，并返回截至本轮末尾的视图。
+
+        每层使用同一个 start；这里不推进 length，避免后一层误把本轮 token 当作
+        额外历史。全部层完成后，模型统一调用 commit 推进长度。"""
         query_length = key.shape[2]
         end = start + query_length
         if start != self.length:
@@ -129,6 +151,7 @@ class ContiguousKVCache:
                 "KV 形状错误: key=%s, value=%s, expected=%s"
                 % (tuple(key.shape), tuple(value.shape), tuple(expected))
             )
+        # 每层都写同一逻辑区间；此处不修改 length，等全部层完成后再统一 commit。
         self.keys[layer_index][:, :, start:end, :].copy_(key)
         self.values[layer_index][:, :, start:end, :].copy_(value)
         return (
@@ -137,39 +160,60 @@ class ContiguousKVCache:
         )
 
     def commit(self, expected_start, query_length):
+        """确认一轮前向的起点未被改变，再统一增加有效长度；应在全部层写入后调用。"""
         if expected_start != self.length:
             raise RuntimeError("KV Cache 在一次前向中被意外修改")
         self.length += query_length
 
 
 class RMSNorm(nn.Module):
+    """沿最后一维做均方根归一化，再乘可学习的逐维缩放系数。
+
+    这里不减均值：计算 x / sqrt(mean(x²) + eps)。eps 用来避免零向量除零；
+    统计过程转为 float32，随后将归一化结果转回输入精度。"""
     def __init__(self, hidden_size, eps):
+        """创建长度为 hidden_size 的缩放参数，并保存数值稳定项 eps。"""
         super().__init__()
         self.weight = nn.Parameter(torch.ones(hidden_size))
         self.eps = eps
 
     def forward(self, hidden_states):
+        """保持输入形状不变，只对最后一维归一化。
+
+        先以 float32 求平方均值，再用 rsqrt 计算倒数平方根；keepdim=True
+        保留末尾单维度，便于把每个 token 的缩放因子广播回它的全部特征。"""
         input_dtype = hidden_states.dtype
         float_states = hidden_states.float()
+        # 这里只沿特征维求均方值；保留末尾维度后，可将每个 token 的系数广播回全部特征。
         variance = float_states.pow(2).mean(dim=-1, keepdim=True)
         normalized = float_states * torch.rsqrt(variance + self.eps)
         return self.weight * normalized.to(input_dtype)
 
 
 class RotaryEmbedding(nn.Module):
+    """按 token 位置生成 RoPE 的余弦和正弦系数，供 Q/K 旋转使用。"""
     def __init__(self, head_dim, rope_theta):
+        """建立每对特征使用的逆频率；注册为 buffer，使其随模型移动但不参与训练。"""
         super().__init__()
         dimensions = torch.arange(0, head_dim, 2, dtype=torch.float32)
         inv_freq = 1.0 / (rope_theta ** (dimensions / head_dim))
         self.register_buffer("inv_freq", inv_freq, persistent=False)
 
     def forward(self, position_ids, output_dtype):
+        """将 [批次, 长度] 的位置编号转换为 [批次, 长度, 每头维度] 的 cos/sin。
+
+        位置乘逆频率得到角度。复制两份频率对应 Qwen3 将向量前后两半配对的布局，
+        并不是为相邻两维交替排列的另一种 RoPE 布局生成系数。"""
+        # 位置表补一个末维，与每对特征的频率相乘，得到 [批次, 长度, 每头维度/2] 的旋转角度。
         freqs = position_ids.float().unsqueeze(-1) * self.inv_freq
         embedding = torch.cat((freqs, freqs), dim=-1)
         return embedding.cos().to(output_dtype), embedding.sin().to(output_dtype)
 
 
 def rotate_half(hidden_states):
+    """把最后一维拆为两半，返回 [-后半, 前半]；输出形状与输入相同。
+
+    它与 cos/sin 相乘后构成二维旋转，必须和模型使用的 RoPE 配对布局一致。"""
     half = hidden_states.shape[-1] // 2
     return torch.cat(
         (-hidden_states[..., half:], hidden_states[..., :half]), dim=-1
@@ -177,6 +221,11 @@ def rotate_half(hidden_states):
 
 
 def apply_rotary_embedding(query, key, cosine, sine):
+    """将位置旋转应用到 Q 和 K，V 不参与旋转。
+
+    Q/K 为 [批次, 头数, 长度, 每头维度]；cos/sin 在头数位置补一个单维度，
+    于是同一 token 的位置系数可以广播到全部头。"""
+    # 在头数维插入 1，让同一个位置的系数供所有 Query/KV 头共享。
     cosine = cosine.unsqueeze(1)
     sine = sine.unsqueeze(1)
     return (
@@ -186,12 +235,20 @@ def apply_rotary_embedding(query, key, cosine, sine):
 
 
 def repeat_key_value(hidden_states, repeat_count):
+    """沿头数维度重复 K/V，使它们能与 Query 的头数对应。
+
+    输入为 [批次, KV头数, 长度, 每头维度]，repeat_count 是 Query/KV 头数之比。
+    这是直观的 GQA 展开实现，会产生展开后的张量；缓存本身仍应保存较少的 KV 头。"""
     if repeat_count == 1:
         return hidden_states
     return hidden_states.repeat_interleave(repeat_count, dim=1)
 
 
 def sdpa_attention(query, key, value, start_position):
+    """按 start_position 构造带历史偏移的因果 Mask，再调用 PyTorch SDPA。
+
+    Query 的第 0 个位置可能已经位于缓存中段，因此用显式 allowed Mask
+    描述可见范围，并设置 is_causal=False，避免再次套用从零开始的三角 Mask。"""
     query_length = query.shape[2]
     key_length = key.shape[2]
     query_positions = start_position + torch.arange(
@@ -210,7 +267,15 @@ def sdpa_attention(query, key, value, start_position):
 
 
 class Qwen3Attention(nn.Module):
+    """实现 Qwen3 的分组查询注意力：Q/K 归一化、位置旋转和按头注意力计算。
+
+    阅读 forward 时依次跟踪投影后的头维度、历史 K/V 的处理、Mask 与输出合并；
+    不同章节的缓存接口不同，以本文件的 forward 参数为准。"""
     def __init__(self, config):
+        """按 Query 与 KV 的头数分别创建投影层，并为每个 Q/K 头创建 RMSNorm。
+
+        q_proj 的输出宽度是 Query头数×每头维度，k_proj/v_proj 则使用 KV头数；
+        o_proj 将所有 Query 头的结果合并回模型隐藏维度。"""
         super().__init__()
         self.num_attention_heads = config.num_attention_heads
         self.num_key_value_heads = config.num_key_value_heads
@@ -228,6 +293,10 @@ class Qwen3Attention(nn.Module):
         self.k_norm = RMSNorm(config.head_dim, config.rms_norm_eps)
 
     def forward(self, hidden_states, cosine, sine, cache, layer_index, start):
+        """将 [批次, 当前长度, 隐藏维度] 投影为分头 Q/K/V，计算注意力后合并回隐藏维度。
+
+        本章把新 K/V 原位写入预分配缓存；按 start 构造带历史偏移的因果 Mask，
+        再调用 SDPA。缓存逻辑长度由模型在全部层完成后统一提交。"""
         batch_size, query_length, _ = hidden_states.shape
         query = self.q_norm(
             self.q_proj(hidden_states).view(
@@ -252,20 +321,28 @@ class Qwen3Attention(nn.Module):
 
 
 class Qwen3MLP(nn.Module):
+    """用 SwiGLU 门控前馈网络变换每个 token 的特征，输入输出隐藏维度相同。"""
     def __init__(self, config):
+        """创建 gate/up 两个升维投影和 down 降维投影；中间维度来自模型配置。"""
         super().__init__()
         self.gate_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
         self.up_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
         self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
 
     def forward(self, hidden_states):
+        """计算 down_proj(silu(gate_proj(x)) * up_proj(x))。
+
+        乘号是逐元素相乘：一条分支生成门值，另一条分支提供内容；这里只变换特征，
+        不在不同 token 之间交换信息。"""
         return self.down_proj(
             F.silu(self.gate_proj(hidden_states)) * self.up_proj(hidden_states)
         )
 
 
 class Qwen3DecoderLayer(nn.Module):
+    """串联 Attention 与 MLP 两个子层，每个子层都采用归一化后计算、再加残差的结构。"""
     def __init__(self, config):
+        """构造本层的注意力、前馈网络及两套独立的 Pre-Norm 参数。"""
         super().__init__()
         self.self_attn = Qwen3Attention(config)
         self.mlp = Qwen3MLP(config)
@@ -273,6 +350,10 @@ class Qwen3DecoderLayer(nn.Module):
         self.post_attention_layernorm = RMSNorm(config.hidden_size, config.rms_norm_eps)
 
     def forward(self, hidden_states, cosine, sine, cache, layer_index, start):
+        """依次执行 Attention 残差块和 MLP 残差块。
+
+        每个子层先保存原 hidden_states，再对归一化后的结果进行计算，最后加回原值；
+        缓存参数传给 Attention，MLP 只处理当前 token 的隐藏状态。"""
         residual = hidden_states
         hidden_states = residual + self.self_attn(
             self.input_layernorm(hidden_states),
@@ -287,7 +368,11 @@ class Qwen3DecoderLayer(nn.Module):
 
 
 class Qwen3Model(nn.Module):
+    """由 token 嵌入、Decoder 层堆叠和末尾 RMSNorm 组成的模型主干。
+
+    它输出隐藏状态；转换为词表上的 logits 由外层 Qwen3ForCausalLM 完成。"""
     def __init__(self, config):
+        """按配置建立嵌入表、各层 Decoder、最终归一化和全模型共用的 RoPE 系数生成器。"""
         super().__init__()
         self.config = config
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
@@ -298,6 +383,9 @@ class Qwen3Model(nn.Module):
         self.rotary_emb = RotaryEmbedding(config.head_dim, config.rope_theta)
 
     def forward(self, input_ids, cache):
+        """对单请求当前片段执行全部 Decoder 层，全部层写入后再提交缓存长度。
+
+        位置从 cache.length 开始；返回当前片段的隐藏状态，不包含旧历史的重复输出。"""
         if input_ids.ndim != 2 or input_ids.shape[0] != 1 or input_ids.shape[1] < 1:
             raise ValueError("本期模型只接受 [1, sequence] 非空 input_ids")
         start = cache.length
@@ -317,12 +405,17 @@ class Qwen3Model(nn.Module):
                 layer_index,
                 start,
             )
+        # 只在整轮各层都成功写入后推进有效长度，保持所有层对历史长度的理解一致。
         cache.commit(start, query_length)
         return self.norm(hidden_states)
 
 
 class Qwen3ForCausalLM(nn.Module):
+    """在主干网络后接词表投影，将每个位置的隐藏状态转换为下一 token 的 logits。
+
+    logits 是未归一化分数；推理循环再选择 argmax 或其他采样方法。"""
     def __init__(self, config):
+        """建立模型主干和词表输出层，然后让输出层与输入嵌入表共享权重。"""
         super().__init__()
         self.config = config
         self.model = Qwen3Model(config)
@@ -330,25 +423,36 @@ class Qwen3ForCausalLM(nn.Module):
         self.tie_weights()
 
     def tie_weights(self):
+        """让 lm_head.weight 引用同一个嵌入参数，避免保存两份相同的词表权重。"""
+        # 绑定同一个 Parameter 对象，实现权重共享，而不是复制一份数值相同的张量。
         self.lm_head.weight = self.model.embed_tokens.weight
 
     def new_cache(self, max_length):
+        """按本模型的配置、设备和精度分配独立缓存；max_length 是容量，不是已写入长度。"""
         parameter = next(self.parameters())
         return ContiguousKVCache(
             self.config, max_length, parameter.device, parameter.dtype
         )
 
     def forward(self, input_ids, cache):
+        """执行主干并将隐藏状态映射为 [批次, 当前长度, 词表大小] 的 logits。
+
+        生成循环通常只取最后位置的分数来选择下一 token。"""
+        # 仅输出当前输入片段的 logits；历史 token 已由缓存参与注意力，不重新输出历史位置。
         return self.lm_head(self.model(input_ids, cache))
 
 
 def resolve_revision(model_name_or_path, revision=None):
+    """优先采用调用方指定的 revision，否则查询本章内置的固定模型版本。"""
     if revision is not None:
         return revision
     return MODEL_REVISIONS.get(model_name_or_path)
 
 
 def resolve_model_directory(model_name_or_path, revision=None):
+    """本地目录存在时直接使用；否则按固定 revision 下载所需的模型与分词文件。
+
+    固定版本使不同实验使用相同权重，下载耗时应与推理计时分开。"""
     local_path = Path(model_name_or_path).expanduser()
     if local_path.is_dir():
         return str(local_path.resolve())
@@ -376,6 +480,7 @@ def resolve_model_directory(model_name_or_path, revision=None):
 
 
 def model_dtype_from_config(config):
+    """将配置中的精度名称映射到 torch.dtype；不支持的名称显式报错。"""
     supported = {
         "bfloat16": torch.bfloat16,
         "float16": torch.float16,
@@ -387,6 +492,7 @@ def model_dtype_from_config(config):
 
 
 def weight_files(model_directory):
+    """查找单文件权重或分片索引，去重并排序后返回所有权重路径；缺失分片时报错。"""
     directory = Path(model_directory)
     single = directory / "model.safetensors"
     if single.is_file():
@@ -405,6 +511,10 @@ def weight_files(model_directory):
 
 
 def load_handwritten_model(model_directory, device, dtype=None):
+    """读取配置和 Safetensors 权重，核对参数名称后返回 eval 模式的模型。
+
+    共享的 lm_head 权重允许不单独出现在文件中，加载后重新绑定。设备与精度
+    转换还涉及 RoPE buffer，因此要关注这里对 inv_freq 的单独处理。"""
     config = Qwen3Config.from_model_directory(model_directory)
     target_dtype = model_dtype_from_config(config) if dtype is None else dtype
     if target_dtype not in (torch.bfloat16, torch.float16, torch.float32):

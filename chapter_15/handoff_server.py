@@ -9,7 +9,11 @@ from handoff_protocol import payload_digest, recv_message, send_message
 
 
 class HandoffStore:
+    """管理一次请求交接的状态机，KV 对象在 ACK 或回退前保持可用。
+
+    典型顺序为 kv_ready→received→acknowledged→释放；失败尝试转为 fallback。"""
     def __init__(self):
+        """创建交接索引、互斥锁和生命周期计数。"""
         self.lock = threading.Lock()
         self.entries = {}
         self.counters = {
@@ -19,9 +23,11 @@ class HandoffStore:
 
     @staticmethod
     def key(request_id, attempt_id):
+        """将请求 ID 与尝试 ID 共同组成键，避免同一请求的不同尝试互相覆盖。"""
         return str(request_id), str(attempt_id)
 
     def publish(self, manifest, payload):
+        """核对清单必需字段、字节数和摘要后，登记为 kv_ready；拒绝重复发布相同尝试。"""
         required = (
             "request_id", "attempt_id", "namespace_digest", "payload_sha256",
             "payload_bytes", "prompt_tokens", "first_token",
@@ -46,6 +52,7 @@ class HandoffStore:
         return {"status": "published", "state": "kv_ready"}
 
     def status(self, request_id, attempt_id):
+        """在锁内读取尝试状态和原因，不存在时明确返回 missing。"""
         key = self.key(request_id, attempt_id)
         with self.lock:
             entry = self.entries.get(key)
@@ -57,6 +64,7 @@ class HandoffStore:
             }
 
     def receive(self, request_id, attempt_id):
+        """只允许读取就绪或已接收的对象，并将状态记录为 received；尚不释放 payload。"""
         key = self.key(request_id, attempt_id)
         with self.lock:
             entry = self.entries.get(key)
@@ -69,6 +77,7 @@ class HandoffStore:
             return dict(entry["manifest"]), entry["payload"]
 
     def acknowledge(self, request_id, attempt_id, accepted, reason):
+        """只对 received 对象处理确认，按是否接受切换到 acknowledged 或 fallback。"""
         key = self.key(request_id, attempt_id)
         with self.lock:
             entry = self.entries.get(key)
@@ -82,6 +91,7 @@ class HandoffStore:
             return {"status": "ok", "state": entry["state"]}
 
     def abort(self, request_id, attempt_id, reason):
+        """将仍可取消的交接转为 fallback，保留失败原因供发送方处理。"""
         key = self.key(request_id, attempt_id)
         with self.lock:
             entry = self.entries.get(key)
@@ -95,6 +105,7 @@ class HandoffStore:
             return {"status": "ok", "state": "fallback"}
 
     def release(self, request_id, attempt_id):
+        """仅在确认或回退后删除对象；不存在返回 False，提前释放则报错。"""
         key = self.key(request_id, attempt_id)
         with self.lock:
             entry = self.entries.get(key)
@@ -107,6 +118,7 @@ class HandoffStore:
             return True
 
     def stats(self):
+        """返回当前对象数、状态及各阶段累计计数，供验证资源最终是否释放。"""
         with self.lock:
             return {
                 "status": "ok", "entries": len(self.entries),
@@ -116,7 +128,9 @@ class HandoffStore:
 
 
 class Handler(socketserver.BaseRequestHandler):
+    """将 TCP 协议操作映射到交接状态机，负责返回清单、payload 或错误。"""
     def handle(self):
+        """处理一次交接请求；服务关闭放到另一线程，避免请求处理线程等待自身退出。"""
         try:
             header, payload = recv_message(self.request)
             op = header.get("op")
@@ -168,11 +182,13 @@ class Handler(socketserver.BaseRequestHandler):
 
 
 class Server(socketserver.ThreadingTCPServer):
+    """允许复用监听地址的多线程 TCP 服务，处理线程作为守护线程随进程退出。"""
     allow_reuse_address = True
     daemon_threads = True
 
 
 def main():
+    """创建交接存储并监听指定端口，直到收到关闭请求或进程结束。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, required=True)

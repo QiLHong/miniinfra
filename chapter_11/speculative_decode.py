@@ -6,14 +6,17 @@ import torch
 
 
 def token_argmax(logits):
+    """选择最大 logit 对应的 token 并转为 Python 整数；设备张量的 .item() 会引入主机读取。"""
     return int(torch.argmax(logits, dim=-1).item())
 
 
 def token_argmax_tensor(logits):
+    """在设备上选择贪心 token，保持 [1, 1] 形状以便直接作为下一次模型输入。"""
     return torch.argmax(logits, dim=-1).reshape(1, 1)
 
 
 def longest_matching_prefix(candidates, target_tokens):
+    """只统计候选与目标结果从开头连续匹配的长度，遇到首个分歧就停止。"""
     if len(candidates) != len(target_tokens):
         raise ValueError("候选和 Target 验证结果长度必须相同")
     accepted = 0
@@ -25,6 +28,7 @@ def longest_matching_prefix(candidates, target_tokens):
 
 
 def truncate_at_eos(tokens, eos_token_id):
+    """保留到首个 EOS 为止的 token（含 EOS），并返回是否触发停止。"""
     if eos_token_id is None:
         return list(tokens), False
     result = []
@@ -37,6 +41,7 @@ def truncate_at_eos(tokens, eos_token_id):
 
 @dataclass
 class RoundStats:
+    """记录一次草稿提出与目标验证的候选、接受数和实际输出，用于逐轮解释结果。"""
     draft_length: int
     candidates: list
     target_tokens: list
@@ -47,6 +52,7 @@ class RoundStats:
 
 @dataclass
 class GenerationStats:
+    """记录两套模型调用次数及候选接受情况，区分少调用目标模型与整体加速。"""
     mode: str
     prompt_tokens: int
     generated_tokens: int = 0
@@ -60,17 +66,20 @@ class GenerationStats:
 
     @property
     def acceptance_rate(self):
+        """计算接受候选数/提出候选数；没有提出候选时返回 0。"""
         if self.proposed_tokens == 0:
             return 0.0
         return self.accepted_tokens / self.proposed_tokens
 
     @property
     def mean_accepted_tokens_per_round(self):
+        """以已记录轮数计算平均接受量；未记录轮明细或轮数为零时返回 0。"""
         if not self.rounds:
             return 0.0
         return self.accepted_tokens / len(self.rounds)
 
     def to_dict(self, include_rounds=True):
+        """将统计数据转为字典并补上派生指标，可省略较大的逐轮明细。"""
         result = asdict(self)
         result["acceptance_rate"] = self.acceptance_rate
         result["mean_accepted_tokens_per_round"] = (
@@ -83,6 +92,7 @@ class GenerationStats:
 
 @dataclass
 class GenerationResult:
+    """保存生成 token、统计和两套缓存的有效长度，便于检查输出与缓存是否同步。"""
     token_ids: list
     stats: GenerationStats
     target_cache_length: int
@@ -90,6 +100,7 @@ class GenerationResult:
 
 
 def prefill(model, prompt_ids, max_length):
+    """为模型分配缓存并处理完整提示，返回缓存和最后一个提示位置的下一 token 分数。"""
     if not prompt_ids:
         raise ValueError("prompt_ids 不能为空")
     cache = model.new_cache(max_length)
@@ -107,6 +118,10 @@ def target_greedy_generate(
     eos_token_id=None,
     max_cache_length=None,
 ):
+    """仅用目标模型逐 token 贪心生成，作为推测解码输出一致性的基准。
+
+    Prefill 已产生首 token；后续每步输入上一 token。返回时最后一个输出
+    尚未送入模型，因此缓存长度通常比“提示+全部输出”的长度少 1。"""
     if max_new_tokens < 1:
         raise ValueError("max_new_tokens 必须大于 0")
     capacity = (
@@ -152,6 +167,11 @@ def speculative_greedy_generate(
     max_cache_length=None,
     include_round_details=True,
 ):
+    """由草稿模型串行提出候选，再由目标模型一次前向验证一整段候选。
+
+    只接受从头连续一致的前缀，首个分歧由目标模型纠正；全部一致时可再输出
+    一个目标 token。两套缓存回滚到共同确认的历史，最后输出留作下一轮 pending。
+    这是贪心解码的一致性实现，不是随机采样场景下的接受/拒绝算法。"""
     if max_new_tokens < 1:
         raise ValueError("max_new_tokens 必须大于 0")
     if draft_length < 1:
@@ -203,6 +223,7 @@ def speculative_greedy_generate(
                 break
 
         candidate_tensor = torch.cat(candidates, dim=1).to(device=target_device)
+        # 把尚未入缓存的 pending 放在候选前面，一次目标前向就能得到逐候选验证分数及额外下一 token。
         verify_ids = torch.cat(
             (pending.to(device=target_device), candidate_tensor), dim=1
         )
@@ -216,10 +237,12 @@ def speculative_greedy_generate(
         )
         bonus_token = token_argmax_tensor(verify_logits[:, len(candidates), :])
         matches = (candidate_tensor == target_token_tensor).flatten()
+        # 布尔匹配转为 0/1 后做前缀积：首个不匹配之后都归零，因此求和只统计连续接受前缀。
         accepted = int(torch.cumprod(matches.to(torch.int32), dim=0).sum().item())
         if accepted == len(candidates):
             round_output = torch.cat((candidate_tensor, bonus_token), dim=1)
         else:
+            # 遇到首个分歧时，采用目标模型在该位置的贪心结果，并丢弃后续草稿候选。
             correction = target_token_tensor[:, accepted : accepted + 1]
             round_output = torch.cat(
                 (candidate_tensor[:, :accepted], correction), dim=1

@@ -29,6 +29,7 @@ from scheduler import make_request_specs
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="swap/recompute 恢复成本上下文扫描")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -47,14 +48,17 @@ def parse_args():
 
 
 def mean(items, key):
+    """求样本的算术平均值；调用方应提供非空样本。"""
     return sum(item[key] for item in items) / len(items)
 
 
 def stddev(items, key):
+    """计算重复测量的离散程度，返回值与输入样本使用同一单位。"""
     return statistics.pstdev(item[key] for item in items)
 
 
 def main():
+    """按不同上下文长度比较换入恢复与重新计算的代价，记录重复测量波动。"""
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("恢复成本扫描需要可用的 NVIDIA GPU")

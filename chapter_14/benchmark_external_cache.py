@@ -18,6 +18,9 @@ from experiment_utils import (
 
 
 def summarize(values):
+    """汇总本组重复测量，保留脚本所需的均值、分位数或资源指标。
+
+    单位沿用输入字段；多次运行的分位数平均值与合并原始样本后重算的分位数不同。"""
     return {
         "mean": statistics.mean(values),
         "median": statistics.median(values),
@@ -27,6 +30,7 @@ def summarize(values):
 
 
 def main():
+    """测量重算与外部缓存冷/热路径，将查找、序列化、传输和模型耗时分开记录。"""
     parser = argparse.ArgumentParser(description="第 14 期 Load vs Prefill 基准")
     add_model_arguments(parser)
     parser.add_argument("--prefix-lengths", default="256,512,1024,2048")

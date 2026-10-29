@@ -19,6 +19,7 @@ from static_decode import StaticDecodeRunner
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--dtype", choices=("bfloat16", "float16"), default="bfloat16")
@@ -36,17 +37,22 @@ def parse_args():
 
 
 def rounded_bucket(prompt_length, decode_steps, block_size):
+    """将提示长度加 Decode 步数向上取整到整块大小，确定固定上下文桶的容量。"""
     required = prompt_length + decode_steps
     return ((required + block_size - 1) // block_size) * block_size
 
 
 def percentile(values, percent):
+    """对非空样本排序，按 nearest-rank 方式选择指定分位数；调用方须保证至少有一个样本。"""
     ordered = sorted(values)
     index = max(0, min(len(ordered) - 1, int(len(ordered) * percent / 100 + 0.999) - 1))
     return ordered[index]
 
 
 def run_sample(runner, prompts, mode, decode_steps):
+    """准备提示后连续提交 Decode 步，分别记录主机提交、设备事件和同步墙钟耗时。
+
+    三种时间口径不能混用；只在全部测量结束后读取输出校验值，避免每步主机同步。"""
     runner.prepare_prompts(prompts)
     torch.cuda.synchronize(runner.device)
     torch.cuda.reset_peak_memory_stats(runner.device)
@@ -83,6 +89,9 @@ def run_sample(runner, prompts, mode, decode_steps):
 
 
 def summarize(samples):
+    """汇总本组重复测量，保留脚本所需的均值、分位数或资源指标。
+
+    单位沿用输入字段；多次运行的分位数平均值与合并原始样本后重算的分位数不同。"""
     fields = (
         "device_ms",
         "wall_ms",
@@ -105,6 +114,7 @@ def summarize(samples):
 
 
 def benchmark_config(model, args, capacity, prompt_length):
+    """建立指定批容量和上下文桶，捕获图后对 eager/图重放进行相同负载的重复测量。"""
     context_bucket = rounded_bucket(
         prompt_length, args.decode_steps, args.block_size
     )
@@ -177,6 +187,7 @@ def benchmark_config(model, args, capacity, prompt_length):
 
 
 def main():
+    """比较静态 eager 与 CUDA Graph 的单步 Decode，单独记录捕获成本和固定缓冲容量。"""
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("性能实验需要 NVIDIA CUDA GPU")

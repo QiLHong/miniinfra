@@ -22,6 +22,7 @@ from scheduler import (
 
 
 def build_tiny_model():
+    """用缩小的词表、隐藏维度和层数创建随机权重模型，便于在 CPU 上快速验证算法。"""
     config = Qwen3Config(
         vocab_size=97,
         hidden_size=32,
@@ -39,6 +40,7 @@ def build_tiny_model():
 
 
 def check_scheduler():
+    """用人工请求状态检查 Prefill 计划和游标推进，核对本章预算约束。"""
     config = SchedulerConfig(max_running_requests=2, token_budget=4)
     scheduler = ChunkedPrefillScheduler(config)
     spec = make_request_specs([list(range(1, 10))], [3])[0]
@@ -103,6 +105,7 @@ def check_swap_roundtrip():
 
 
 def check_pinned_pool_exhaustion():
+    """制造 CPU 池不足，要求明确失败并保留原 GPU 请求数据；CPU 测试不启用页锁定。"""
     model = build_tiny_model()
     config = model.config
     device = torch.device("cpu")
@@ -128,6 +131,7 @@ def check_pinned_pool_exhaustion():
 
 
 def build_specs():
+    """按本实验设定的提示长度、输出预算与到达时间构造固定请求列表。"""
     sequences = [
         [3, 5, 7, 11, 13, 17, 19, 23, 29, 31],
         [37, 41, 43, 47, 53, 59, 61, 67, 71],
@@ -140,6 +144,7 @@ def build_specs():
 
 
 def check_engine_paths():
+    """比较无压力参考、换出恢复和重算恢复，核对输出、抢占事件及传输字节守恒。"""
     torch.manual_seed(11)
     device = torch.device("cpu")
     model = build_tiny_model()
@@ -207,6 +212,9 @@ def check_engine_paths():
 
 
 def main():
+    """运行本章的小规模 CPU 冒烟检查，验证核心数据流、状态或输出一致性。
+
+    使用本地微型模型或测试替身，不下载真实模型；通过这些检查不等于 GPU 性能验证。"""
     check_scheduler()
     check_swap_roundtrip()
     check_pinned_pool_exhaustion()

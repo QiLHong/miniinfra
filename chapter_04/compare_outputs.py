@@ -21,6 +21,7 @@ from qwen3_tokenizer import Qwen3Tokenizer
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="Continuous Batching 正确性实验")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -33,6 +34,7 @@ def parse_args():
 
 
 def main():
+    """用同一组请求运行本章的基准与优化路径，逐请求检查生成结果并报告资源指标。"""
     args = parse_args()
     if args.max_new_tokens < 2:
         raise ValueError("max_new_tokens 至少为 2")

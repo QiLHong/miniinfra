@@ -19,6 +19,7 @@ from qwen3_tokenizer import Qwen3Tokenizer
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="Continuous Batching 推理")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -43,6 +44,7 @@ def parse_args():
 
 
 def print_result(name, result, tokenizer):
+    """解码生成的 token，并按本章的计时与内存口径展示结果。"""
     print("\n[%s]" % name)
     for index, token_ids in enumerate(result["new_token_ids"]):
         print("请求 %d: %s" % (
@@ -65,6 +67,7 @@ def print_result(name, result, tokenizer):
 
 
 def main():
+    """读取命令行配置、加载模型并运行本章推理路径，最后展示生成结果及相关指标。"""
     args = parse_args()
     if args.max_running_requests < 1:
         raise ValueError("max_running_requests 必须大于 0")

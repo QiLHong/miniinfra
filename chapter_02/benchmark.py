@@ -16,6 +16,7 @@ from qwen3_model import (
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="KV Cache 固定长度受控实验")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID, help="模型 ID 或本地目录")
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -33,7 +34,7 @@ def parse_args():
 
 
 def make_fixed_input(prompt_length, vocab_size, device):
-    """构造内容确定、长度精确的合成 Token 序列。"""
+    """构造固定 token 长度的模型输入，供不同配置重复测量相同工作量。"""
 
     token_ids = torch.arange(prompt_length, dtype=torch.long, device=device)
     token_ids = (token_ids * 7919 + 17) % vocab_size
@@ -41,10 +42,12 @@ def make_fixed_input(prompt_length, vocab_size, device):
 
 
 def average(values):
+    """计算样本的算术平均值，空样本的处理方式以下方分支为准。"""
     return sum(values) / len(values)
 
 
 def aggregate(mode, prompt_length, runs):
+    """合并同一模式与提示长度的重复结果，汇总 Prefill、Decode 样本和显存峰值。"""
     metrics = [run["metrics"] for run in runs]
     decode_samples = [
         value for metric in metrics for value in metric["decode_times_ms"]
@@ -72,6 +75,7 @@ def aggregate(mode, prompt_length, runs):
 
 
 def print_table(rows):
+    """按固定列顺序打印 CSV 摘要，保留字段名与单位，便于后续对照。"""
     print(
         "mode,prompt_tokens,generated_tokens,prefill_ms_mean,decode_ms_mean,"
         "decode_ms_p50,decode_ms_p95,end_to_end_ms_mean,"
@@ -87,6 +91,7 @@ def print_table(rows):
 
 
 def main():
+    """按本章定义的输入规模运行预热与重复测量，汇总延迟、吞吐和资源指标。"""
     args = parse_args()
     if any(length < 1 for length in args.prompt_lengths):
         raise ValueError("所有 Prompt 长度必须大于 0")

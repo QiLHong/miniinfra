@@ -25,6 +25,7 @@ DEFAULT_PROMPTS = [
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--target-model", default=DEFAULT_TARGET_MODEL_ID)
     parser.add_argument("--draft-model", default=DEFAULT_DRAFT_MODEL_ID)
@@ -44,6 +45,7 @@ def parse_args():
 
 
 def main():
+    """对照目标模型独立贪心生成与推测解码的 token 序列，并记录接受率和调用次数。"""
     args = parse_args()
     if args.device.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError("没有可用 CUDA GPU")

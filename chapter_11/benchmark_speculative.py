@@ -27,6 +27,7 @@ DEFAULT_PROMPTS = [
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--target-model", default=DEFAULT_TARGET_MODEL_ID)
     parser.add_argument("--draft-model", default=DEFAULT_DRAFT_MODEL_ID)
@@ -47,11 +48,15 @@ def parse_args():
 
 
 def reset_peak_memory(device):
+    """为接下来的测量重置 CUDA 峰值显存统计；不代表释放当前模型权重。"""
     if torch.device(device).type == "cuda":
         torch.cuda.reset_peak_memory_stats()
 
 
 def measure(function, first_token_function, device, repeats):
+    """分别测首 token 和完整生成，核对首 token 一致，再汇总延迟、吞吐和峰值显存。
+
+    这里的 Decode 平均时间由两次独立计时相减估算，并不是逐 token 时间线测量。"""
     e2e = []
     ttft = []
     peaks = []
@@ -86,6 +91,7 @@ def measure(function, first_token_function, device, repeats):
 
 
 def main():
+    """对比目标模型独立生成与不同草稿长度的推测解码，汇总延迟、接受率和内存。"""
     args = parse_args()
     if args.device.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError("没有可用 CUDA GPU")

@@ -7,6 +7,7 @@ from experiment_utils import cache_service, write_json
 
 
 def main():
+    """以有限外部缓存容量运行重复工作负载，记录叶子 LRU 淘汰与后续命中变化。"""
     parser = argparse.ArgumentParser(description="第 14 期外部 Cache LRU Trace")
     parser.add_argument("--entry-bytes", type=int, default=4096)
     parser.add_argument("--capacity-entries", type=int, default=2)

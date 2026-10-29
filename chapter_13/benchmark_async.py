@@ -27,6 +27,7 @@ MODES = ("sync", "async", "relaxed")
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="同步/异步 KV 传输容量压力实验")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -45,6 +46,7 @@ def parse_args():
 
 
 def print_summary(label, metrics):
+    """并列展示吞吐、ITL、抢占次数和传输设备/显式等待耗时。"""
     print(
         "%s: makespan %.1f ms, %.1f tok/s, ITL p95 %.1f ms, preempt %.0f, "
         "transfer device/exposed %.1f/%.1f ms"
@@ -59,6 +61,7 @@ def print_summary(label, metrics):
 
 
 def main():
+    """在相同资源约束和负载下比较同步与异步传输引擎的耗时和等待。"""
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("主实验需要 NVIDIA GPU")

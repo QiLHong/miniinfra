@@ -12,6 +12,7 @@ from experiment_utils import add_model_arguments, handoff_service, write_json
 
 
 def worker_base(args, role, output, port=0, inject_failure="none"):
+    """为指定角色构造子进程命令，统一模型、输入、交接标识和失败注入参数。"""
     worker = Path(__file__).with_name("worker.py")
     command = [
         sys.executable, str(worker), "--role", role,
@@ -32,6 +33,7 @@ def worker_base(args, role, output, port=0, inject_failure="none"):
 
 
 def checked_wait(process, name):
+    """等待工作进程并收集输出，非零退出时连同标准输出和错误一起报告。"""
     stdout, stderr = process.communicate(timeout=300)
     if process.returncode:
         raise RuntimeError(
@@ -42,6 +44,7 @@ def checked_wait(process, name):
 
 
 def run_split_case(args, directory, client, port, inject_failure="none"):
+    """先启动 Prefill 并等待 KV 就绪，再启动 Decode，收集双方记录并汇总成功或回退路径。"""
     suffix = inject_failure
     producer_path = directory / ("prefill-%s.json" % suffix)
     decoder_path = directory / ("decode-%s.json" % suffix)
@@ -100,6 +103,7 @@ def run_split_case(args, directory, client, port, inject_failure="none"):
 
 
 def main():
+    """启动 Prefill/Decode 工作进程，核对交接成功及失败回退场景与单体执行结果。"""
     parser = argparse.ArgumentParser(description="第 15 期跨进程正确性验证")
     add_model_arguments(parser)
     parser.add_argument("--prompt-length", type=int, default=513)

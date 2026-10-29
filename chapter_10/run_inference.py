@@ -11,6 +11,7 @@ from static_decode import StaticDecodeRunner
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--prompt", default="请用一句话解释 CUDA Graph。")
@@ -25,6 +26,7 @@ def parse_args():
 
 
 def main():
+    """读取命令行配置、加载模型并运行本章推理路径，最后展示生成结果及相关指标。"""
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("自然语言 CUDA Graph 推理需要 NVIDIA CUDA GPU")

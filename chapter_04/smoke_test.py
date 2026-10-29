@@ -12,6 +12,7 @@ from qwen3_model import Qwen3Config, Qwen3ForCausalLM
 
 
 def build_tiny_model():
+    """用缩小的词表、隐藏维度和层数创建随机权重模型，便于在 CPU 上快速验证算法。"""
     config = Qwen3Config(
         vocab_size=97,
         hidden_size=32,
@@ -29,6 +30,9 @@ def build_tiny_model():
 
 
 def main():
+    """运行本章的小规模 CPU 冒烟检查，验证核心数据流、状态或输出一致性。
+
+    使用本地微型模型或测试替身，不下载真实模型；通过这些检查不等于 GPU 性能验证。"""
     torch.manual_seed(7)
     device = torch.device("cpu")
     model = build_tiny_model()

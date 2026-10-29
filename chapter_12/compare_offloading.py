@@ -36,6 +36,7 @@ PROMPTS = {
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="抢占式换出正确性对照")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -52,6 +53,7 @@ def parse_args():
 
 
 def first_divergence(reference, candidate):
+    """按顺序查找两条 token 输出的首个差异，便于定位恢复或调度改变后的错误。"""
     for index, (left, right) in enumerate(zip(reference, candidate)):
         if left != right:
             return index
@@ -61,7 +63,7 @@ def first_divergence(reference, candidate):
 
 
 def logits_error(reference, candidate):
-    """只在双方都实际生成的位置比较，不跨越缺失位置补零。"""
+    """比较对应 logits 的数值误差，补充只比较 argmax token 可能遗漏的差别。"""
     count = min(len(reference), len(candidate))
     if count == 0:
         return {"compared_positions": 0, "max_abs_error": 0.0}
@@ -73,6 +75,7 @@ def logits_error(reference, candidate):
 
 
 def main():
+    """比较无抢占、换出恢复和重算恢复的结果，检查恢复后的 token 与 logits。"""
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("正确性实验需要可用的 NVIDIA GPU")

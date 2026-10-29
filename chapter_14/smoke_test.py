@@ -12,7 +12,9 @@ from paged_cache import PagedKVCache
 
 
 class DummyModel(nn.Module):
+    """为外部缓存测试生成可预测的 K/V 与 logits，不依赖真实模型权重。"""
     def __init__(self):
+        """提供最小模型配置和用于查询设备/精度的占位参数。"""
         super().__init__()
         self.anchor = nn.Parameter(torch.zeros(()))
         self.config = SimpleNamespace(
@@ -30,6 +32,7 @@ class DummyModel(nn.Module):
         past_key_values=None,
         use_cache=False,
     ):
+        """按 token 和位置构造确定性 K/V，拼接历史后返回可预测 logits，便于检查序列化往返。"""
         batch, count = input_ids.shape
         past_length = 0 if past_key_values is None else past_key_values[0][0].shape[2]
         new_values = (
@@ -51,17 +54,22 @@ class DummyModel(nn.Module):
 
 
 class FailingClient:
+    """故意模拟“查找命中但读取/发布失败”的缓存客户端，用来验证引擎回退。"""
     def lookup(self, identities):
+        """返回一次伪命中，让引擎继续进入需要测试的加载路径。"""
         return 1
 
     def load(self, identities):
+        """模拟损坏的 payload，以触发加载失败后的重算分支。"""
         raise RuntimeError("simulated corrupt payload")
 
     def store(self, *args, **kwargs):
+        """模拟服务不可用，检查发布失败不会破坏当前请求输出。"""
         raise RuntimeError("simulated unavailable store")
 
 
 def test_paged_roundtrip():
+    """将分页缓存导出成字节后导入另一个块池，逐位核对逻辑 K/V 不受物理块编号影响。"""
     model = DummyModel()
     cache = PagedKVCache(model.config, 4, 8, "cpu", torch.float32)
     cache.create_request("a")
@@ -79,6 +87,7 @@ def test_paged_roundtrip():
 
 
 def test_service_and_engine():
+    """启动本地缓存服务，比较冷/热请求与重算结果，并检查命名空间隔离和条目数。"""
     model = DummyModel().eval()
     token_ids = list(range(25))
     with cache_service(capacity_mib=1) as (client, _):
@@ -114,6 +123,7 @@ def test_service_and_engine():
 
 
 def test_fixed_capacity_lru():
+    """用只能容纳一个 payload 的服务容量发布两个条目，验证旧叶子被淘汰而新条目保留。"""
     namespace = {"model": "dummy", "revision": "v1", "dtype": "float32"}
     chunker = TokenChunker(namespace, 4)
     first = chunker.identities([1, 2, 3, 4, 9])[0]
@@ -130,6 +140,7 @@ def test_fixed_capacity_lru():
 
 
 def test_failure_falls_back_to_recompute():
+    """让缓存加载与发布分别失败，检查命中归零、完整重算和错误记录。"""
     model = DummyModel().eval()
     token_ids = list(range(17))
     result = run_request(
@@ -145,6 +156,9 @@ def test_failure_falls_back_to_recompute():
 
 
 def main():
+    """运行本章的小规模 CPU 冒烟检查，验证核心数据流、状态或输出一致性。
+
+    使用本地微型模型或测试替身，不下载真实模型；通过这些检查不等于 GPU 性能验证。"""
     test_paged_roundtrip()
     test_service_and_engine()
     test_fixed_capacity_lru()

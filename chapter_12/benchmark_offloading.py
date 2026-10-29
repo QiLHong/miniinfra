@@ -34,6 +34,7 @@ MODES = ("swap", "recompute", "conservative", "relaxed")
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="抢占式换出容量压力主实验")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -89,6 +90,9 @@ def itl_overlaps(request_metrics, resource_events):
 
 
 def summarize(result):
+    """汇总本组重复测量，保留脚本所需的均值、分位数或资源指标。
+
+    单位沿用输入字段；多次运行的分位数平均值与合并原始样本后重算的分位数不同。"""
     metrics = dict(result["metrics"])
     overlaps = itl_overlaps(result["request_metrics"], result["resource_events"])
     event_aligned = [
@@ -106,6 +110,7 @@ def summarize(result):
 
 
 def print_mode_summary(label, metrics):
+    """展示本模式的总时长、吞吐、ITL 和抢占暂停指标，便于横向比较。"""
     print(
         "%-14s makespan %8.1f ms | 输出 %6.1f tok/s | ITL p50 %5.1f p95 %6.1f "
         "max %7.1f | 抢占 %d | 暂停 p95 %7.1f max %7.1f ms" % (
@@ -120,6 +125,7 @@ def print_mode_summary(label, metrics):
 
 
 def run_mode(model, specs, mode, pool_blocks, common):
+    """将实验模式映射到抢占、准入和容量参数，再调用同一个引擎入口。"""
     if mode == "conservative":
         return run_engine(
             model, specs, preempt_mode="swap",
@@ -135,6 +141,7 @@ def run_mode(model, specs, mode, pool_blocks, common):
 
 
 def main():
+    """在受限 GPU 块池下比较换出与重算策略，记录传输、恢复和请求延迟。"""
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("主实验需要可用的 NVIDIA GPU")
@@ -224,9 +231,11 @@ def main():
                     "pool=%s %s#%d" % (display_pool, mode, repeat), metrics,
                 )
             def mean(key):
+                """对本组重复运行中指定字段求均值。"""
                 return sum(item[key] for item in per_repeat) / len(per_repeat)
 
             def stddev(key):
+                """对本组重复运行中指定字段计算总体标准差。"""
                 return statistics.pstdev(item[key] for item in per_repeat)
 
             aggregated = {

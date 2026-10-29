@@ -10,11 +10,15 @@ from paged_cache import DTYPE_NAMES, PagedKVCache
 
 
 def synchronize(device):
+    """CUDA 设备上等待已提交工作完成，CPU 路径直接返回。
+
+    GPU 调用通常异步返回；在主机计时边界同步，才能把实际执行时间纳入测量。"""
     if torch.device(device).type == "cuda":
         torch.cuda.synchronize(device)
 
 
 def _new_kv_only(present, count):
+    """从模型返回的“历史+新 token”缓存中切出最后 count 个位置，避免重复追加旧历史。"""
     return [
         (key[:, :, -count:, :], value[:, :, -count:, :])
         for key, value in present
@@ -22,6 +26,7 @@ def _new_kv_only(present, count):
 
 
 def build_namespace(model_id, revision, model, dtype, block_size):
+    """记录模型版本、精度、头形状和 KV 布局，隔离不能互相复用的外部缓存。"""
     config = model.config
     return {
         "model_id": model_id,
@@ -54,6 +59,10 @@ def run_request(
     capture_logits=False,
     request_id="request-0",
 ):
+    """执行一个请求的重算或外部缓存路径，并记录缓存查找、导入、模型与发布开销。
+
+    外部路径按连续前缀复用完整 Chunk，剩余提示继续计算；缓存服务失败时
+    按下方异常分支退回重算。请求结束后释放本地块，外部缓存由服务独立管理。"""
     if mode not in ("recompute", "external"):
         raise ValueError("mode 必须是 recompute 或 external")
     if mode == "external" and external_client is None:
@@ -162,6 +171,7 @@ def run_request(
             time.perf_counter() - model_start
         ) * 1000
         count = end - cursor
+        # 模型返回的缓存含旧历史，追加前只截取本轮的新 K/V，避免历史被重复写入。
         cache.append(request_id, _new_kv_only(present, count))
         metrics["executed_prefill_tokens"] += count
         cursor = end

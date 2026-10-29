@@ -15,6 +15,7 @@ from qwen3_tokenizer import Qwen3Tokenizer
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="运行手写 Qwen3-0.6B 推理")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID, help="模型 ID 或本地目录")
     parser.add_argument(
@@ -27,13 +28,16 @@ def parse_args():
 
 
 def synchronize(device):
-    """CUDA 默认异步执行，计时前后必须等待 GPU 完成工作。"""
+    """CUDA 设备上等待已提交工作完成，CPU 路径直接返回。
+
+    GPU 调用通常异步返回；在主机计时边界同步，才能把实际执行时间纳入测量。"""
 
     if device.type == "cuda":
         torch.cuda.synchronize(device)
 
 
 def build_input_ids(tokenizer, prompt, device):
+    """对用户提示应用聊天模板并编码，构造形状为 [1, 提示长度] 的设备整数张量。"""
     token_ids = tokenizer.encode_chat_prompt(prompt)
     return torch.tensor([token_ids], dtype=torch.long, device=device)
 
@@ -83,6 +87,7 @@ def generate_with_metrics(model, input_ids, max_new_tokens, eos_token_id, device
 
 
 def main():
+    """读取命令行配置、加载模型并运行本章推理路径，最后展示生成结果及相关指标。"""
     args = parse_args()
     if args.max_new_tokens < 1:
         raise ValueError("--max-new-tokens 必须大于 0")

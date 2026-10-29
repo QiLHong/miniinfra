@@ -33,6 +33,7 @@ from scheduler import PrefillPlan, RequestState, make_request_specs
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="固定 Decode batch 的同步拷贝停顿")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -49,6 +50,9 @@ def parse_args():
 
 
 def summarize(values):
+    """汇总本组重复测量，保留脚本所需的均值、分位数或资源指标。
+
+    单位沿用输入字段；多次运行的分位数平均值与合并原始样本后重算的分位数不同。"""
     return {
         "mean_ms": sum(values) / len(values),
         "stddev_ms": statistics.pstdev(values),
@@ -59,6 +63,7 @@ def summarize(values):
 
 @torch.inference_mode()
 def main():
+    """比较复制活动存在与否时的 Decode 延迟，观察带宽和计算资源竞争。"""
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("同步拷贝停顿微基准需要可用的 NVIDIA GPU")
@@ -108,6 +113,7 @@ def main():
     )
 
     def decode_once():
+        """执行一次 Decode 并更新请求输出与缓存长度，返回本轮测得的总耗时。"""
         result = _timed_decode(model, states, cache, 2, 0, device, False)
         tokens, _, total_ms, _, _, _, _ = result
         for state, token in zip(states, tokens):
@@ -116,6 +122,7 @@ def main():
         return total_ms
 
     def roundtrip_once():
+        """把指定请求的所有块复制到 CPU 再拷回原位置，测量完整往返耗时。"""
         victim_blocks = list(cache.block_tables[victim_id])
         synchronize(device)
         start = time.perf_counter()

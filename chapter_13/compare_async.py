@@ -25,6 +25,7 @@ PROMPTS = (
 
 
 def parse_args():
+    """解析本脚本的实验参数并返回配置；默认值、可选项和参数间约束以下方定义为准。"""
     parser = argparse.ArgumentParser(description="sync/async 正确性对照")
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--revision", default=DEFAULT_MODEL_REVISION)
@@ -40,6 +41,7 @@ def parse_args():
 
 
 def first_divergence(left, right):
+    """按顺序查找两条 token 输出的首个差异，便于定位恢复或调度改变后的错误。"""
     for index, pair in enumerate(zip(left, right)):
         if pair[0] != pair[1]:
             return index
@@ -47,6 +49,7 @@ def first_divergence(left, right):
 
 
 def logits_error(reference, candidate):
+    """比较对应 logits 的数值误差，补充只比较 argmax token 可能遗漏的差别。"""
     count = min(len(reference), len(candidate))
     return max(
         (
@@ -58,6 +61,7 @@ def logits_error(reference, candidate):
 
 
 def main():
+    """对照同步和异步换出路径及无抢占参考，核对输出与资源所有权完成情况。"""
     args = parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("正确性实验需要 NVIDIA GPU")
