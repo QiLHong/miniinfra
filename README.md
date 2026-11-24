@@ -36,7 +36,7 @@
 每章都可独立安装和运行。以第 01 章为例：
 
 ```bash
-git clone https://github.com/SVDX-lab/miniinfra.git
+git clone https://github.com/QiLHong/miniinfra.git
 cd miniinfra
 
 python3 -m venv .venv
